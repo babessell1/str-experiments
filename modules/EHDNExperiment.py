@@ -6,7 +6,7 @@ import os
 from scipy.stats import ranksums, ks_2samp
 from statsmodels.stats.multitest import multipletests
 import multiprocessing
-from RepeatsExperiment import RepeatsExperiment
+from modules.RepeatsExperiment import RepeatsExperiment
 
 class EHDNExperiment(RepeatsExperiment):
     def __init__(self, tsv_dir, csv_metadata, chroms="All", sex=None, tissue=None,
