@@ -10,11 +10,13 @@ import multiprocessing
 
 class RepeatsExperiment:
     def __init__(self, tsv_dir, csv_metadata, chroms="All", sex=None, tissue=None,
-                 dataset=None, cohort=None, race=None, ethnicity=None, apoe=None, slop=100
+                 dataset=None, cohort=None, race=None, ethnicity=None, apoe=None, 
+                 slop=100, slop_modifier=1.5
     ):
         self.tsv_dir = tsv_dir
         self.csv_metadata = csv_metadata
-        self.slop = slop 
+        self.slop = slop
+        self.slop_modifier = slop_modifier
         
         if chroms=="All":
             chroms =  ['chr1', 'chr2', 'chr3', 'chr4', 'chr5', 'chr6', 'chr7', 'chr8',
@@ -159,7 +161,7 @@ class RepeatsExperiment:
                 prev_chrom is not None
                 and prev_chrom == chrom
                 and (self.is_rotation(unit, prev_unit) or self.is_rotation(self.rev_complement(unit), prev_unit))
-                and left - prev_left <= self.slop
+                and abs(left - prev_left) <= self.slop
             ):
                 # welford online algo
                 n = prev_counts + count
@@ -231,6 +233,7 @@ class RepeatsExperiment:
         # Initialize an empty DataFrame to store the results
         result_df = pd.DataFrame()
         iteration = 1
+
         for chrom in self.chroms:
             print(chrom)
             # Load, filter, combine and sort the first two TSV files into a DataFrame
@@ -238,18 +241,14 @@ class RepeatsExperiment:
                 df1 = self.filter_variants(pd.read_csv(self.tsvs[0], sep='\t'), chrom)
                 df2 = self.filter_variants(pd.read_csv(self.tsvs[1], sep='\t'), chrom)
                 dff = pd.concat([df1, df2])
+                print(dff)
                 dff["mean_left"] = dff["left"]
                 dff["counts"] = np.ones(dff.shape[0])        
                 dff["variance_left"] = np.zeros(dff.shape[0])
                 dff["m2"] = np.zeros(dff.shape[0])
                 #dff["mean_df"] = dff["left"]
-                columns_to_drop = [
-                    "allele1_est", "allele2_est", "anchored_reads",
-                    "spanning_reads", "spanning_pairs", "expected_spanning_pairs",
-                    "spanning_pairs_pctl", "left_clips", "right_clips",
-                    "unplaced_pairs", "depth", "sum_str_counts", "right"
-                ]
-                dff.drop(columns=columns_to_drop, inplace=True)
+                #print(dff)
+                dff.drop(columns=self.cols_to_drop, inplace=True)
                 #print(dff)
                 #print("before: ", dff.shape)
                 #print("--------------- INPUT -------------")
@@ -273,7 +272,7 @@ class RepeatsExperiment:
                 next_df["variance_left"] = np.zeros(next_df.shape[0])
                 next_df["mean_left"] = next_df["left"]
                 next_df["m2"] = np.zeros(next_df.shape[0])
-                next_df.drop(columns=columns_to_drop, inplace=True)
+                next_df.drop(columns=self.cols_to_drop, inplace=True)
                 dff_before = dff
                 dff = pd.concat([dff, next_df])
                 
@@ -307,7 +306,7 @@ class RepeatsExperiment:
         variant = variant_row['repeatunit']
         mean_left = variant_row['mean_left']
         std_left = np.sqrt(variant_row['variance_left'])
-        range_ = self.slop*10
+        range_ = self.slop * self.slop_modifier
         chrom = variant_row['#chrom']
         matching_variants = []
         matching_filenames = []

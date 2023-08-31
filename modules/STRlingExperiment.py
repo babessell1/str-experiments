@@ -10,12 +10,14 @@ from modules.RepeatsExperiment import RepeatsExperiment
 
 class STRlingExperiment(RepeatsExperiment):
     def __init__(self, tsv_dir, csv_metadata, chroms="All", sex=None, tissue=None,
-                 dataset=None, cohort=None, race=None, ethnicity=None, apoe=None, slop=100
+                 dataset=None, cohort=None, race=None, ethnicity=None, apoe=None, 
+                slop=100, slop_modifier=1.5
     ):
-        super().__init__(tsv_dir, csv_metadata, chroms, sex, tissue, dataset, cohort, race, ethnicity, apoe, slop)
-        
+        super().__init__(tsv_dir, csv_metadata, chroms, sex, tissue, dataset, cohort, race, ethnicity, apoe, slop, slop_modifier)
+        self.cols_to_drop = [
+            'allele1_est', 'allele2_est', 'right', 'merged_expansions'
+                ]
    
-    @classmethod
     def filter_tsv_files(self):
         """
         Get case/control TSV file lists from the directory and filter files that adhere to desired covariates described by metadict
@@ -27,7 +29,7 @@ class STRlingExperiment(RepeatsExperiment):
         for file in os.listdir(self.tsv_dir):
             if file.endswith('-genotype.txt'):
                 subject, tissue = self.get_metadata_from_filename(file)
-                if not self.metadict["Tissue"] or tissue == self.metadict["Tissue"]:
+                if not self.metadict['Tissue'] or tissue == self.metadict['Tissue']:
                     subject_metadata = self.get_metadata_from_subject(subject)
                     add_flag = True
                     for key, val in self.metadict.items():
@@ -44,7 +46,6 @@ class STRlingExperiment(RepeatsExperiment):
                                 self.cont_tsvs.append(file_path)
 
 
-    @classmethod
     def filter_variants(self, tsv_df, chrom):
         """
         Remove single nucleotide expansions and select by chromosome
@@ -55,7 +56,6 @@ class STRlingExperiment(RepeatsExperiment):
         return filtered_df
 
 
-    @classmethod
     def collapse_sample_tsvs(self, in_dir, out_dir):
         """
         match adjacent variants from a single subject. Aggregate row based on chromosome,
@@ -98,7 +98,7 @@ class STRlingExperiment(RepeatsExperiment):
                         prev_chrom is not None
                         and prev_chrom == chrom
                         and (self.is_rotation(unit, prev_unit) or self.is_rotation(self.rev_complement(unit), prev_unit))
-                        and left - prev_left <= self.slop
+                        and abs(left - prev_left) <= self.slop * self.slop_modifier
                     ):
                         # update counts, mean left and add allele2 size estimate to previous variant
                         new_sum_allele2_est = sum_allele2_est + prev_sum_allele2_est

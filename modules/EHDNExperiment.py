@@ -10,17 +10,22 @@ from modules.RepeatsExperiment import RepeatsExperiment
 
 class EHDNExperiment(RepeatsExperiment):
     def __init__(self, tsv_dir, csv_metadata, chroms="All", sex=None, tissue=None,
-                 dataset=None, cohort=None, race=None, ethnicity=None, apoe=None, slop=100
+                 dataset=None, cohort=None, race=None, ethnicity=None, apoe=None,
+                slop=100, slop_modifier=1.5
     ):
-        super().__init__(tsv_dir, csv_metadata, chroms, sex, tissue, dataset, cohort, race, ethnicity, apoe, slop)
+        super().__init__(tsv_dir, csv_metadata, chroms, sex, tissue, dataset, cohort, race, ethnicity, apoe, slop, slop_modifier)
+        self.cols_to_drop = [
+            'allele_est', 'right', 'merged_expansions'
+        ]
 
-          
+
+    @staticmethod
     def filter_variants(tsv_df, chrom):
         """
         Remove single nucleotide expansions and select by chromosome
         """
-        filtered_df = tsv_df[~tsv_df['motif'].isin(['A', 'G', 'C', 'T'])]
-        filtered_df = filtered_df[filtered_df['contig'] == chrom]
+        filtered_df = tsv_df[~tsv_df['repeatunit'].isin(['A', 'G', 'C', 'T'])]
+        filtered_df = filtered_df[filtered_df['#chrom'] == chrom]
 
         return filtered_df
     
@@ -68,7 +73,7 @@ class EHDNExperiment(RepeatsExperiment):
                 df.sort_values(['contig', 'motif', 'start'], inplace=True)
                 df.reset_index(drop=True, inplace=True)
                 df['counts'] = np.ones(df.shape[0])
-                df['mean_left'] = np.zeros(df.shape[0])
+                df['mean_left'] = df.start
                 collapsed_variants = []
 
                 prev_left = None
@@ -93,7 +98,7 @@ class EHDNExperiment(RepeatsExperiment):
                         prev_chrom is not None
                         and prev_chrom == chrom
                         and (self.is_rotation(unit, prev_unit) or self.is_rotation(self.rev_complement(unit), prev_unit))
-                        and left - prev_left <= self.slop
+                        and abs(left - prev_left) <= self.slop * self.slop_modifier
                     ):
                         # update counts, mean left and add allele2 size estimate to previous variant
                         new_sum_allele_est = sum_allele_est + prev_sum_allele_est
