@@ -49,27 +49,6 @@ class RepeatsExperiment:
 
 
     @staticmethod
-    def get_metadata_from_subject(subject):
-        """
-        Match subject name to metadata file and pull the rest of the useful metadata as a dictionary
-        """
-        meta_df = pd.read_csv(self.csv_metadata)
-        subject_metadata = {
-            'Dataset': meta_df.loc[meta_df['Subject'] == subject, 'Dataset'].values[0],
-            'Disease': meta_df.loc[meta_df['Subject'] == subject, 'Disease'].values[0],
-            'Cohort': meta_df.loc[meta_df['Subject'] == subject, 'Cohort'].values[0],
-            'Sex': meta_df.loc[meta_df['Subject'] == subject, 'Sex'].values[0],
-            'Race': meta_df.loc[meta_df['Subject'] == subject, 'Race'].values[0],
-            'Ethnicity': meta_df.loc[meta_df['Subject'] == subject, 'Ethnicity'].values[0],
-            'Diagnosis': meta_df.loc[meta_df['Subject'] == subject, 'Diagnosis'].values[0],
-            'APOE': meta_df.loc[meta_df['Subject'] == subject, 'APOE'].values[0],
-            'Assay': meta_df.loc[meta_df['Subject'] == subject, 'Assay'].values[0],
-        }
-
-        return subject_metadata
-
-
-    @staticmethod
     def rev_complement(motif):
         rev_dict = {
             "A": "T",
@@ -125,7 +104,28 @@ class RepeatsExperiment:
         # string 2 not found as substring
         return False
     
-    
+
+    @classmethod
+    def get_metadata_from_subject(self, subject):
+        """
+        Match subject name to metadata file and pull the rest of the useful metadata as a dictionary
+        """
+        meta_df = pd.read_csv(self.csv_metadata)
+        subject_metadata = {
+            'Dataset': meta_df.loc[meta_df['Subject'] == subject, 'Dataset'].values[0],
+            'Disease': meta_df.loc[meta_df['Subject'] == subject, 'Disease'].values[0],
+            'Cohort': meta_df.loc[meta_df['Subject'] == subject, 'Cohort'].values[0],
+            'Sex': meta_df.loc[meta_df['Subject'] == subject, 'Sex'].values[0],
+            'Race': meta_df.loc[meta_df['Subject'] == subject, 'Race'].values[0],
+            'Ethnicity': meta_df.loc[meta_df['Subject'] == subject, 'Ethnicity'].values[0],
+            'Diagnosis': meta_df.loc[meta_df['Subject'] == subject, 'Diagnosis'].values[0],
+            'APOE': meta_df.loc[meta_df['Subject'] == subject, 'APOE'].values[0],
+            'Assay': meta_df.loc[meta_df['Subject'] == subject, 'Assay'].values[0],
+        }
+
+        return subject_metadata
+
+
     @classmethod
     def collapse_variants(self, df):
         """
