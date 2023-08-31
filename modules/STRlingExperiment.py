@@ -15,6 +15,7 @@ class STRlingExperiment(RepeatsExperiment):
         super().__init__(tsv_dir, csv_metadata, chroms, sex, tissue, dataset, cohort, race, ethnicity, apoe, slop)
         
    
+    @classmethod
     def filter_tsv_files(self):
         """
         Get case/control TSV file lists from the directory and filter files that adhere to desired covariates described by metadict
@@ -41,8 +42,9 @@ class STRlingExperiment(RepeatsExperiment):
                                 self.case_tsvs.append(file_path)
                             elif subject_metadata["Diagnosis"] == "Control":
                                 self.cont_tsvs.append(file_path)
-                                
 
+
+    @classmethod
     def filter_variants(self, tsv_df, chrom):
         """
         Remove single nucleotide expansions and select by chromosome
@@ -53,6 +55,7 @@ class STRlingExperiment(RepeatsExperiment):
         return filtered_df
 
 
+    @classmethod
     def collapse_sample_tsvs(self, in_dir, out_dir):
         """
         match adjacent variants from a single subject. Aggregate row based on chromosome,

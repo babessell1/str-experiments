@@ -125,7 +125,8 @@ class RepeatsExperiment:
         # string 2 not found as substring
         return False
     
-
+    
+    @classmethod
     def collapse_variants(self, df):
         """
         match adjacent variants from a subject and aggregate row based on chromosome, 
@@ -223,6 +224,7 @@ class RepeatsExperiment:
         return new_df
 
 
+    @classmethod
     def summarize_experiment(self, summary_csv=None):
         """
         This creates a summarized df of variants accross all subjects by adding variants from a single subject to the aggregated summary df one at a time and collapsing them to the summary
@@ -301,6 +303,7 @@ class RepeatsExperiment:
         return dff
     
 
+    @classmethod
     def par_process_variant(self, variant_row):
         """
         Match each variant in a summary df to all corresponding variants in each subject df to extract case and control allele2 estimate sizes for each variant (defined by a row in the summary df). This can be done in parallel
@@ -371,6 +374,7 @@ class RepeatsExperiment:
         }
 
 
+    @classmethod
     def perform_wilcoxon_test(self, summary_df, out_file=None):
         """
         Perform the Wilcoxon rank sum test on case and control allele2_size values to determine significant variants
