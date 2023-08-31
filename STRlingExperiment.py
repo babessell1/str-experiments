@@ -35,9 +35,7 @@ class STRlingExperiment:
             "APOE": apoe,
         }
         
-        self.filter_tsv_files()
-
-        
+   
     def filter_tsv_files(self):
         """
         Get case/control TSV file lists from the directory and filter files that adhere to desired covariates described by metadict
@@ -76,6 +74,7 @@ class STRlingExperiment:
         
         return subject, tissue
 
+
     def get_metadata_from_subject(self, subject):
         """
         Match subject name to metadata file and pull the rest of the useful metadata as a dictionary
@@ -95,6 +94,7 @@ class STRlingExperiment:
 
         return subject_metadata
 
+
     def filter_variants(self, tsv_df, chrom):
         """
         Remove single nucleotide expansions and select by chromosome
@@ -104,6 +104,7 @@ class STRlingExperiment:
 
         return filtered_df
     
+
     def rev_complement(self, motif):
         rev_dict = {
             "A": "T",
@@ -158,6 +159,7 @@ class STRlingExperiment:
         # string 2 not found as substring
         return False
     
+
     def collapse_sample_tsvs(self, in_dir, out_dir):
         """
         match adjacent variants from a single subject. Aggregate row based on chromosome,
@@ -511,6 +513,7 @@ class STRlingExperiment:
             'warning': warn_flag,
             'multi_expansions': cnt_multi
         }
+
 
     def perform_wilcoxon_test(self, summary_df, out_file=None):
         """
