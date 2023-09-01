@@ -17,6 +17,7 @@ class EHDNExperiment(RepeatsExperiment):
         self.cols_to_drop = [
             'allele_est', 'right', 'merged_expansions'
         ]
+        self.test_variable = 'allele_est'
 
 
     @staticmethod

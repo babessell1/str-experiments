@@ -17,6 +17,7 @@ class STRlingExperiment(RepeatsExperiment):
         self.cols_to_drop = [
             'allele1_est', 'allele2_est', 'right', 'merged_expansions'
                 ]
+        self.test_variable = 'allele2_est'
    
     def filter_tsv_files(self):
         """

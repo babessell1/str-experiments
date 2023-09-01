@@ -13,6 +13,7 @@ class RepeatsExperiment:
                  dataset=None, cohort=None, race=None, ethnicity=None, apoe=None, 
                  slop=100, slop_modifier=1.5
     ):
+        self.test_variable = None
         self.tsv_dir = tsv_dir
         self.csv_metadata = csv_metadata
         self.slop = slop
@@ -324,7 +325,7 @@ class RepeatsExperiment:
             add_variants = variant_df[
                 (variant_df['left'] >= mean_left - range_ ) &
                 (variant_df['left'] <= mean_left + range_ )
-            ]['allele2_est'].tolist()
+            ][self.test_variable].tolist()
             
             if len(add_variants) > 1:
                 #print("WARNING: MORE THAN ONE MATCHING VARIANT FOUND IN SINGLE SUBJECT")
