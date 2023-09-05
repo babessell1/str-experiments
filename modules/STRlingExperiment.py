@@ -101,6 +101,7 @@ class STRlingExperiment(RepeatsExperiment):
                         and (self.is_rotation(unit, prev_unit) or self.is_rotation(self.rev_complement(unit), prev_unit))
                         and abs(left - prev_left) <= self.slop * self.slop_modifier
                     ):
+                        #TODO: REFACTOR THESE REPETITIVE BLOCKS
                         # update counts, mean left and add allele2 size estimate to previous variant
                         new_sum_allele2_est = sum_allele2_est + prev_sum_allele2_est
                         new_sum_allele1_est = sum_allele1_est + prev_sum_allele1_est
