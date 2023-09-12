@@ -3,21 +3,28 @@ import numpy as np
 from itertools import zip_longest
 import sys
 import os
-from scipy.stats import ranksums, ks_2samp
+from scipy.stats import ranksums, ks_2samp, anderson_ksamp
 from statsmodels.stats.multitest import multipletests
 import multiprocessing
+import warnings
 
+# Filter out the "p-value capped" warning
+warnings.filterwarnings("ignore", category=UserWarning, message="p-value capped: true value larger than 0.25")
 
 class RepeatsExperiment:
     def __init__(self, tsv_dir, csv_metadata, chroms="All", sex=None, tissue=None,
                  dataset=None, cohort=None, race=None, ethnicity=None, apoe=None, 
-                 slop=100, slop_modifier=1.5
+                 slop=100, slop_modifier=1.5, test="AD"
     ):
         self.test_variable = None
         self.tsv_dir = tsv_dir
         self.csv_metadata = csv_metadata
         self.slop = slop
         self.slop_modifier = slop_modifier
+        self.test = test
+
+        if self.test == "AD":
+            warnings.warn("")
         
         if chroms=="All":
             chroms =  ['chr1', 'chr2', 'chr3', 'chr4', 'chr5', 'chr6', 'chr7', 'chr8',
@@ -349,9 +356,20 @@ class RepeatsExperiment:
 
         total_found = len([val for val in case_vals if np.abs(val)>0] + [val for val in cont_vals if np.abs(val>0)])
         #print(f"counts: {variant_row['counts']} vs {total_found}")
-        
-        #effect, p_value = ranksums(case_vals, cont_vals)
-        statistic, p_value = ks_2samp(case_vals, cont_vals)
+
+        if self.test == "KS":
+            # perform Kolmogorov-Smirnov test
+            statistic, p_value = ks_2samp(case_vals, cont_vals)
+        elif self.test == "WT":
+            # perform Wilcoxon rank sum test
+            statistic, p_value = ranksums(case_vals, cont_vals)
+        elif self.test == "AD":
+            # perform Anderson-Darling test
+            res = anderson_ksamp([case_vals, cont_vals])
+            statistic  = res.statistic
+            p_value = res.pvalue
+        else:
+            ValueError("Invalid test type. Must be one of 'KS', 'RS', or 'AD'")
 
         return {
             'chrom': chrom,
@@ -370,7 +388,7 @@ class RepeatsExperiment:
         }
 
 
-    def perform_wilcoxon_test(self, summary_df, out_file=None):
+    def perform_stat_test(self, summary_df, out_file=None, test="ks"):
         """
         Perform the Wilcoxon rank sum test on case and control allele2_size values to determine significant variants
         """

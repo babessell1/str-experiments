@@ -11,9 +11,9 @@ from modules.RepeatsExperiment import RepeatsExperiment
 class STRlingExperiment(RepeatsExperiment):
     def __init__(self, tsv_dir, csv_metadata, chroms="All", sex=None, tissue=None,
                  dataset=None, cohort=None, race=None, ethnicity=None, apoe=None, 
-                slop=100, slop_modifier=1.5
+                slop=100, slop_modifier=1.5, test="AD"
     ):
-        super().__init__(tsv_dir, csv_metadata, chroms, sex, tissue, dataset, cohort, race, ethnicity, apoe, slop, slop_modifier)
+        super().__init__(tsv_dir, csv_metadata, chroms, sex, tissue, dataset, cohort, race, ethnicity, apoe, slop, slop_modifier, test)
         self.cols_to_drop = [
             'allele1_est', 'allele2_est', 'right', 'merged_expansions'
                 ]
