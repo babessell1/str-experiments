@@ -71,6 +71,7 @@ class EHDNExperiment(RepeatsExperiment):
                 tsv = os.path.join(in_dir, file)
                 subject, tissue = self.get_metadata_from_filename(file)
                 df = pd.read_csv(tsv, sep='\t')
+                df = self.filter_variants(df, "All")
                 df.sort_values(['contig', 'motif', 'start'], inplace=True)
                 df.reset_index(drop=True, inplace=True)
                 df['counts'] = np.ones(df.shape[0])

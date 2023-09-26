@@ -52,7 +52,8 @@ class STRlingExperiment(RepeatsExperiment):
         Remove single nucleotide expansions and select by chromosome
         """
         filtered_df = tsv_df[~tsv_df['repeatunit'].isin(['A', 'G', 'C', 'T'])]
-        filtered_df = filtered_df[filtered_df['#chrom'] == chrom]
+        if chrom != 'All':
+            filtered_df = filtered_df[filtered_df['#chrom'] == chrom]
 
         return filtered_df
 
@@ -69,6 +70,7 @@ class STRlingExperiment(RepeatsExperiment):
                 tsv = os.path.join(in_dir, file)
                 subject, tissue = self.get_metadata_from_filename(tsv)
                 df = pd.read_csv(tsv, sep='\t')
+                df = self.filter_variants(df, "All")
                 df.sort_values(['#chrom', 'repeatunit', 'left'], inplace=True)
                 df.reset_index(drop=True, inplace=True)
                 df['counts'] = np.ones(df.shape[0])

@@ -52,10 +52,15 @@ class RepeatsExperiment:
         Pull subject ID and tissue type from the filename
         """
         basename = os.path.basename(filename)
-        subject = "-".join(basename.split("-")[0:3])
-        tissue = basename.split("-")[3]
-        
+        if basename.startswith("ADNI"):
+            subject = "_".join(basename.split("_")[0:4])
+            tissue = "unknown"
+        else:
+            subject = "-".join(basename.split("-")[0:3])
+            tissue = basename.split("-")[3]
+
         return subject, tissue
+
 
 
     @staticmethod
@@ -312,6 +317,7 @@ class RepeatsExperiment:
         Match each variant in a summary df to all corresponding variants in each subject df to extract case and control allele2 estimate sizes for each variant (defined by a row in the summary df). This can be done in parallel
         """
         variant = variant_row['repeatunit']
+        print(f"{variant}", end='\r')
         mean_left = variant_row['mean_left']
         std_left = np.sqrt(variant_row['variance_left'])
         range_ = self.slop * self.slop_modifier
@@ -320,9 +326,6 @@ class RepeatsExperiment:
         matching_filenames = []
         add_similar = True  # if true, when multiple expansions in same STR region, add together. Otherwise skip the sample
         
-        # Get the total number of TSV files for this core
-        total_files = len(self.tsvs)
-        processed_files = 0
         warn_flag = False
         
         cnt_multi = 0
@@ -333,6 +336,21 @@ class RepeatsExperiment:
                 (variant_df['left'] >= mean_left - range_ ) &
                 (variant_df['left'] <= mean_left + range_ )
             ][self.test_variable].tolist()
+
+            #if variant == "AT" and chrom == "chr1" and abs(mean_left - 52797421) < range_:
+            if len(add_variants) > 1:
+                print(f"MULTI relative to {mean_left}-----------------------")
+                for row in add_variants:
+                    print(row)
+                
+                print(f"IF SORTED")
+                sorted_variant_df = sorted(variant_df)
+                add_variants_sorted = sorted_variant_df[
+                    (sorted_variant_df['left'] >= mean_left - range_ ) &
+                    (sorted_variant_df['left'] <= mean_left + range_ )
+                ][self.test_variable].tolist()
+                for row in add_variants_sorted:
+                    print(row)
             
             if len(add_variants) > 1:
                 #print("WARNING: MORE THAN ONE MATCHING VARIANT FOUND IN SINGLE SUBJECT")
@@ -400,6 +418,8 @@ class RepeatsExperiment:
         processed_variants = 0
 
         pool = multiprocessing.Pool()  # Create a multiprocessing Pool
+
+        summary_df = summary_df[summary_df['repeatunit'] == "AT"]
         
         for result in pool.imap_unordered(self.par_process_variant, [row for _, row in summary_df.iterrows()]):
         # The rest of the code remains the same
