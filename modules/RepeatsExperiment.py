@@ -72,7 +72,7 @@ class RepeatsExperiment:
             "G": "C",
             "N": "N"
         }
-        return [rev_dict[base] for base in motif[::-1]]
+        return "".join([rev_dict[base] for base in motif[::-1]])
 
     
     @staticmethod
@@ -241,6 +241,7 @@ class RepeatsExperiment:
         """
         This creates a summarized df of variants accross all subjects by adding variants from a single subject to the aggregated summary df one at a time and collapsing them to the summary
         """
+        print("Creating Summary file...")
         if summary_csv:
             return pd.read_csv(summary_csv)
         # Initialize an empty DataFrame to store the results
@@ -248,11 +249,10 @@ class RepeatsExperiment:
         iteration = 1
 
         for chrom in self.chroms:
-            print(chrom)
             # Load, filter, combine and sort the first two TSV files into a DataFrame
             if iteration==1:
-                df1 = self.filter_variants(pd.read_csv(self.tsvs[0], sep='\t'), chrom)
-                df2 = self.filter_variants(pd.read_csv(self.tsvs[1], sep='\t'), chrom)
+                #df1 = self.filter_variants(pd.read_csv(self.tsvs[0], sep='\t'), chrom)
+                #df2 = self.filter_variants(pd.read_csv(self.tsvs[1], sep='\t'), chrom)
                 dff = pd.concat([df1, df2])
                 print(dff)
                 dff["mean_left"] = dff["left"]
@@ -279,8 +279,9 @@ class RepeatsExperiment:
                 start_idx = 0
             files_processed = 2
             for file in self.tsvs[start_idx:]:
+                print(file, end='\r')
                 files_processed+=1
-                next_df = self.filter_variants(pd.read_csv(file, sep='\t'), chrom)
+                #next_df = self.filter_variants(pd.read_csv(file, sep='\t'), chrom)
                 next_df["counts"] = np.ones(next_df.shape[0])
                 next_df["variance_left"] = np.zeros(next_df.shape[0])
                 next_df["mean_left"] = next_df["left"]
