@@ -18,6 +18,7 @@ class EHDNExperiment(RepeatsExperiment):
             'allele_est', 'right', 'merged_expansions'
         ]
         self.test_variable = 'allele_est'
+        self.lrdn_files = None
 
 
     @staticmethod
@@ -86,7 +87,6 @@ class EHDNExperiment(RepeatsExperiment):
         prev_sum_allele_est = None
 
         for index, row in df.iterrows():
-            print(row)
             # get new variant stats
             left = row['start']
             unit = row['motif']
@@ -162,8 +162,6 @@ class EHDNExperiment(RepeatsExperiment):
         tsv_file_name = os.path.basename(tsv_file)
         out_file_path = os.path.join(out_dir, tsv_file_name)
         new_df.to_csv(out_file_path, sep='\t', index=False)
-        
-        return new_df
     
 
     def collapse_sample_tsvs(self, in_dir, out_dir):
@@ -175,5 +173,141 @@ class EHDNExperiment(RepeatsExperiment):
         pool.starmap(self.process_tsv_file, [(os.path.join(in_dir, file), out_dir) for file in os.listdir(in_dir) if file.endswith('locus.tsv')])
         pool.close()
         pool.join()
+        self.filter_tsv_files()
 
     
+    def lrdn_process_chromosome(self, iter):
+        """
+        iteratate through rows of subset cdf from merge output of expansion hunter denovo-lrdn, get values for each sample in rows
+        split into case/controls and perform statistical test
+        row = looks like:
+        HEADERS: contig  start   end counts
+        SAMPLE_VAL: chr1    1000    1001    SAMPLE_NAME_1:{normalized counts},SAMPLE_NAME_2:{normalized counts},...
+        """
+        i = iter[0]
+        row = iter[1]
+        p_values = []
+        processed_samples = []
+        chrom = row[0]
+        left = row[1]['start']
+        case_names = []
+        case_counts = []
+        cont_names = []
+        cont_counts = []
+        split = row["counts"].split(",")
+        for entry in split:
+            s = entry.split(":")
+            subject_metadata = self.get_metadata_from_subject(s[0])
+            if subject_metadata["Diagnosis"] != "Unknown":
+                continue
+            elif subject_metadata["Diagnosis"] == "Case":
+                case_names.append(s[0])
+                case_counts.append(s[1])
+            elif subject_metadata["Diagnosis"] == "Control":
+                cont_names.append(s[0])
+                cont_counts.append(s[1])
+            
+            processed_samples.append(s[0])
+
+        # add uncalled samples to the dataframe (assume they are unexpanded)
+        for file in self.lrdn_files:
+            sample = file.split("_vcpa")[0]
+            if sample not in processed_samples:
+                subject_metadata = self.get_metadata_from_subject(s[0])
+                if subject_metadata["Diagnosis"] != "Unknown":
+                    continue
+                elif subject_metadata["Diagnosis"] == "Case":
+                    case_names.append(sample)
+                    case_counts.append(0)
+                elif subject_metadata["Diagnosis"] == "Control":
+                    cont_names.append(0)
+                    cont_counts.append(sample)
+
+        if len(processed_samples) < 200:
+            return None
+
+        if self.test == "KS":
+            # perform Kolmogorov-Smirnov test
+            statistic, p_value = ks_2samp(case_counts, cont_counts)
+        elif self.test == "WT":
+            # perform Wilcoxon rank sum test
+            statistic, p_value = ranksums(case_counts, cont_counts)
+        elif self.test == "AD":
+            # perform Anderson-Darling test
+            res = anderson_ksamp([case_counts, cont_counts])
+            statistic  = res.statistic
+            p_value = res.pvalue
+        else:
+            ValueError("Invalid test type. Must be one of 'KS', 'RS', or 'AD'")
+        
+        p_values.append(p_value)
+
+        progress = i / len(self.lrdn_files) * 100
+        print(f"#### Progress: {progress:.2f}% [{i}/{len(self.lrdn_files)}] ########################################\r", end='')
+
+        return {
+            'chrom': chrom,
+            'mean_left': left,
+            'std_dev': "NA",
+            'variant': "NA",
+            #'effect': effect,
+            'statistic': statistic,
+            'p_value': p_value,
+            'case_vals': case_counts,
+            'cont_vals': cont_counts,
+            'recovered_variants': len(case_counts) + len(cont_counts),
+            'actual_variants': "NA",
+            'warning': "NA",
+            'multi_expansions': "NA"
+        }
+
+
+    def process_lrdn(self, merge_file, test="KS"):
+        # Create a multiprocessing Pool
+
+        significant_variants = []
+        processed_variants = 0
+
+        pool = multiprocessing.Pool()
+
+        print("Processing LRDN variants...")
+
+        # Parallelize the summarize_chromosome function for each chromosome
+        df = pd.read_csv(merge_file, sep='\t')
+        for result in pool.imap_unordered(self.lrdn_process_chromosome, [(i,row) for i, row in df.iterrows()]):
+            if result is not None:
+
+                significant_variants.append({
+                    'chrom': result['chrom'],
+                    'mean_left': result['mean_left'],
+                    'std_dev': result['std_dev'],
+                    'variant': result['variant'],
+                    #'effect': effect, 
+                    'statistic': result['statistic'],
+                    'p_value': result['p_value'],
+                    'case_values': result['case_vals'],
+                    'control_values': result['cont_vals'],
+                    'recovered_variants': result['recovered_variants'],
+                    'actual_variants': result['actual_variants'],
+                    'warning':  result['warning'],
+                    'multi_expansions': result['multi_expansions']
+                })
+                
+        # Close the pool and wait for all processes to finish
+        pool.close()
+        pool.join()
+
+        # Perform multiple testing correction
+        p_values = [variant['p_value'] for variant in significant_variants]
+        reject, p_corrected, _, _ = multipletests(p_values, method='fdr_bh')
+
+        for i, variant in enumerate(significant_variants):
+            variant['p_corrected'] = p_corrected[i]
+            variant['reject_null'] = reject[i]
+
+        self.WT_df = pd.DataFrame(significant_variants)
+        self.WT_df.sort_values('p_corrected', inplace=True, ascending=True)
+        self.WT_df.to_csv(f"results/{chrom}-{self.test}-lrdn.csv")
+
+
+        return None    

@@ -13,17 +13,20 @@ def download_tar_files_from_directory(bucket_name, directory_name, destination_f
     response = s3.list_objects_v2(Bucket=bucket_name, Prefix=directory_name)
 
     # Iterate over the objects and download tar files
-    for obj in response.get('Contents', []):
-        key = obj['Key']
-        filename = os.path.basename(key)
-        samples = filename.split('.')[0].split('___')
+    # paginator
+    paginator = s3.get_paginator('list_objects_v2')
+    for response in paginator.paginate(Bucket=bucket_name, Prefix=directory_name):
+        for obj in response.get('Contents', []):
+            key = obj['Key']
+            filename = os.path.basename(key)
+            samples = filename.split('.')[0].split('___')
 
-        # Check if the object is a tar file
-        if filename.endswith('.tar'):
-            if not all([len(glob.glob(os.path.join(destination_folder, unpack_directory, f'{sample}*'))) > 0 for sample in samples]):
-                # Download the tar file
-                destination_path = os.path.join(destination_folder, filename)
-                print(f'Downloading {filename}', end='\r')
+            # Check if the object is a tar file
+            if filename.endswith('.tar'):
+                if not all([len(glob.glob(os.path.join(destination_folder, unpack_directory, f'{sample}*'))) > 0 for sample in samples]):
+                    # Download the tar file
+                    destination_path = os.path.join(destination_folder, filename)
+                    print(f'Downloading {filename}', end='\r')
                 s3.download_file(bucket_name, key, destination_path)
             
 

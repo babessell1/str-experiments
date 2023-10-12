@@ -237,78 +237,90 @@ class RepeatsExperiment:
         return new_df
 
 
-    def summarize_chromosome(self, chrom):
-        df1 = pd.read_csv(self.tsvs[0], sep='\t')
-        df2 = pd.read_csv(self.tsvs[1], sep='\t')
-        dff = pd.concat([df1, df2])
-        dff["mean_left"] = dff["left"]
-        dff["counts"] = np.ones(dff.shape[0])
-        dff["variance_left"] = np.zeros(dff.shape[0])
-        dff["m2"] = np.zeros(dff.shape[0])
-        dff.drop(columns=self.cols_to_drop, inplace=True)
-        dff = self.collapse_variants(dff)
-        dff['left'] = dff['mean_left']
-
-        start_idx = 2
-        files_processed = 2
-        iteration = 1
-        for file in self.tsvs[start_idx:]:
-            files_processed += 1
-            next_df = pd.read_csv(file, sep='\t')
-            next_df["counts"] = np.ones(next_df.shape[0])
-            next_df["variance_left"] = np.zeros(next_df.shape[0])
-            next_df["mean_left"] = next_df["left"]
-            next_df["m2"] = np.zeros(next_df.shape[0])
-            next_df.drop(columns=self.cols_to_drop, inplace=True)
-            dff_before = dff
-            dff = pd.concat([dff, next_df])
-            dff = self.collapse_variants(dff)
-
-            if any((dff['counts'] > files_processed) & (dff['#chrom'] == chrom)):
-                print(f"Error: Counts are higher than the current iteration ({iteration+1}).")
-                print("Offending rows in the aggregate DataFrame:")
-                print(dff[(dff['counts'] > files_processed) & (dff['#chrom'] == chrom)])
-                print('before')
-                print(dff_before[(dff_before['counts'] > iteration) & (dff_before['#chrom'] == chrom)])
-                print('next')
-                print(next_df[(next_df['repeatunit'] == "AT") & (next_df['#chrom'] == chrom)])
-                raise ValueError("Counts are higher than the current iteration.")
-            
-            iteration += 1
-
-        progress = iteration / len(self.tsvs) * 100
-        print(f"#### Progress: {progress:.2f}% [{iteration}/{len(self.tsvs) }] ########################################\r", end='')
-
-            # write to file
-        dff.to_csv(f"results/strling_summary_{chrom}.csv")
-
-        return
-
-    
     def summarize_experiment(self, summary_csv=None):
+        """
+        This creates a summarized df of variants accross all subjects by adding variants from a single subject to the aggregated summary df one at a time and collapsing them to the summary
+        """
         print("Creating Summary file...")
-
         if summary_csv:
             return pd.read_csv(summary_csv)
+        # Initialize an empty DataFrame to store the results
+        result_df = pd.DataFrame()
+        iteration = 1
 
-        # Create a multiprocessing Pool
-        pool = multiprocessing.Pool()
-
-        # Parallelize the summarize_chromosome function for each chromosome
         for chrom in self.chroms:
-            pool.apply(self.summarize_chromosome, args=(chrom,))
+            # Load, filter, combine and sort the first two TSV files into a DataFrame
+            if iteration==1:
+                #df1 = self.filter_variants(pd.read_csv(self.tsvs[0], sep='\t'), chrom)
+                #df2 = self.filter_variants(pd.read_csv(self.tsvs[1], sep='\t'), chrom)
+                df1 = pd.read_csv(self.tsvs[0], sep='\t')
+                df2 = pd.read_csv(self.tsvs[1], sep='\t')
+                dff = pd.concat([df1, df2])
+                dff["mean_left"] = dff["left"]
+                dff["counts"] = np.ones(dff.shape[0])        
+                dff["variance_left"] = np.zeros(dff.shape[0])
+                dff["m2"] = np.zeros(dff.shape[0])
+                #dff["mean_df"] = dff["left"]
+                #print(dff)
+                dff.drop(columns=self.cols_to_drop, inplace=True)
+                #print(dff)
+                #print("before: ", dff.shape)
+                #print("--------------- INPUT -------------")
+                #print(dff)
+                dff = self.collapse_variants(dff)
+                #print("--------------- OUTPUT -------------")
+                #print(dff)
+                dff['left'] = dff['mean_left']
+                #print("after: ", dff.shape)
+                #print(dff)
 
-        # Close the pool and wait for all processes to finish
-        pool.close()
-        pool.join()
+            if iteration == 1:
+                start_idx = 2
+            else:
+                start_idx = 0
+            files_processed = 2
+            for file in self.tsvs[start_idx:]:
+                print(file, end='\r')
+                files_processed+=1
+                #next_df = self.filter_variants(pd.read_csv(file, sep='\t'), chrom)
+                next_df = pd.read_csv(file, sep='\t')
+                next_df["counts"] = np.ones(next_df.shape[0])
+                next_df["variance_left"] = np.zeros(next_df.shape[0])
+                next_df["mean_left"] = next_df["left"]
+                next_df["m2"] = np.zeros(next_df.shape[0])
+                next_df.drop(columns=self.cols_to_drop, inplace=True)
+                dff_before = dff
+                dff = pd.concat([dff, next_df])
+                
+                #print("--------------- INPUT -------------")
+                #print(dff)
+                dff = self.collapse_variants(dff)
+                # Check if counts are higher than the current iteration
+                if any((dff['counts'] > files_processed) & (dff['#chrom'] == chrom)):
+                    print(f"Error: Counts are higher than the current iteration ({iteration+1}).")
+                    print("Offending rows in the aggregate DataFrame:")
+                    print(dff[(dff['counts'] > files_processed) & (dff['#chrom'] == chrom)])
+                    print('before')
+                    print(dff_before[(dff_before['counts'] > iteration) & (dff_before['#chrom'] == chrom)])
+                    print('next')
+                    print(next_df[(next_df['repeatunit'] == "AT") & (next_df['#chrom'] == chrom)])
+                    raise ValueError("Counts are higher than the current iteration.")
 
-        return None
+                    #print("--------------- OUTPUT -------------")
+                    #print(dff)
+                    dff['left'] = dff['mean_left']
+            
+            iteration+=1
+
+        return dff
+    
 
     def par_process_variant(self, variant_row):
         """
         Match each variant in a summary df to all corresponding variants in each subject df to extract case and control allele2 estimate sizes for each variant (defined by a row in the summary df). This can be done in parallel
         """
         variant = variant_row['repeatunit']
+        print(f"{variant}", end='\r')
         mean_left = variant_row['mean_left']
         std_left = np.sqrt(variant_row['variance_left'])
         range_ = self.slop * self.slop_modifier
@@ -330,20 +342,18 @@ class RepeatsExperiment:
 
             #if variant == "AT" and chrom == "chr1" and abs(mean_left - 52797421) < range_:
             if len(add_variants) > 1:
-                #print(f"MULTI relative to {mean_left}-----------------------")
+                print(f"MULTI relative to {mean_left}-----------------------")
                 for row in add_variants:
-                    #print(row)
-                    pass
+                    print(row)
                 
-                #print(f"IF SORTED")
-                sorted_variant_df = variant_df.sort_values('left')
+                print(f"IF SORTED")
+                sorted_variant_df = sorted(variant_df)
                 add_variants_sorted = sorted_variant_df[
                     (sorted_variant_df['left'] >= mean_left - range_ ) &
                     (sorted_variant_df['left'] <= mean_left + range_ )
                 ][self.test_variable].tolist()
                 for row in add_variants_sorted:
-                    #print(row)
-                    pass
+                    print(row)
             
             if len(add_variants) > 1:
                 #print("WARNING: MORE THAN ONE MATCHING VARIANT FOUND IN SINGLE SUBJECT")
@@ -367,10 +377,6 @@ class RepeatsExperiment:
 
         total_found = len([val for val in case_vals if np.abs(val)>0] + [val for val in cont_vals if np.abs(val>0)])
         #print(f"counts: {variant_row['counts']} vs {total_found}")
-
-        # dont bother testing if the amount of expansions is low
-        if sum(val > 0 for val in case_vals) + sum(val > 0 for val in cont_vals) < 200:
-            return None
 
         if self.test == "KS":
             # perform Kolmogorov-Smirnov test
@@ -401,43 +407,62 @@ class RepeatsExperiment:
             'warning': warn_flag,
             'multi_expansions': cnt_multi
         }
-    
 
-    def perform_stat_test(self, summary_df, out_file=None):
+
+    def perform_stat_test(self, summary_df, out_file=None, test="ks"):
         """
         Perform the Wilcoxon rank sum test on case and control allele2_size values to determine significant variants
         """
         significant_variants = []
+
+        tsv_files = self.case_tsvs + self.cont_tsvs
 
         total_variants = len(summary_df)
         processed_variants = 0
 
         pool = multiprocessing.Pool()  # Create a multiprocessing Pool
 
-        #summary_df = summary_df[summary_df['repeatunit'] == "AT"]
+        summary_df = summary_df[summary_df['repeatunit'] == "AT"]
         
         for result in pool.imap_unordered(self.par_process_variant, [row for _, row in summary_df.iterrows()]):
         # The rest of the code remains the same
-            if result is not None:
-                significant_variants.append({
-                    'chrom': result['chrom'],
-                    'mean_left': result['mean_left'],
-                    'std_dev': result['std_dev'],
-                    'variant': result['variant'],
-                    #'effect': effect, 
-                    'statistic': result['statistic'],
-                    'p_value': result['p_value'],
-                    'case_values': result['case_vals'],
-                    'control_values': result['cont_vals'],
-                    'recovered_variants': result['recovered_variants'],
-                    'actual_variants': result['actual_variants'],
-                    'warning':  result['warning'],
-                    'multi_expansions': result['multi_expansions']
-                })
+            
+            chrom = result['chrom']
+            mean_left = result['mean_left']
+            std_dev = result['std_dev']
+            variant = result['variant']
+            #effect = result['effect']
+            statistic = result['statistic']
+            p_value = result['p_value']
+            case_values = result['case_vals']
+            cont_values = result['cont_vals']
+            act_vars = result['actual_variants']
+            rec_vars = result['recovered_variants']
+            warning = result['warning']
+            multis = result['multi_expansions']
 
-                processed_variants += 1
-                progress = processed_variants / total_variants * 100
-                print(f"Progress: {progress:.2f}% [{processed_variants}/{total_variants}] ########################################\r", end='')
+            # Perform the Wilcoxon rank sum test
+            #effect, p_value = ranksums(case_values, control_values)
+
+            significant_variants.append({
+                'chrom': chrom,
+                'mean_left': mean_left,
+                'std_dev': std_dev,
+                'variant': variant,
+                #'effect': effect, 
+                'statistic': statistic,
+                'p_value': p_value,
+                'case_values': case_values,
+                'control_values': cont_values,
+                'recovered_variants': rec_vars,
+                'actual_variants': act_vars,
+                'warning': warning,
+                'multi_expansions': multis
+            })
+
+            processed_variants += 1
+            progress = processed_variants / total_variants * 100
+            #print(f"Progress: {progress:.2f}% [{processed_variants}/{total_variants}]\r", end='')
 
         pool.close()  # Close the multiprocessing Pool
         pool.join()   # Wait for all processes to finish
@@ -452,7 +477,6 @@ class RepeatsExperiment:
 
         self.WT_df = pd.DataFrame(significant_variants)
         self.WT_df.sort_values('p_corrected', inplace=True, ascending=True)
-
         if out_file:
             self.WT_df.to_csv(out_file)
 
