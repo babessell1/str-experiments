@@ -18,6 +18,7 @@ class STRlingExperiment(RepeatsExperiment):
             'allele1_est', 'allele2_est', 'right', 'merged_expansions'
                 ]
         self.test_variable = 'allele2_est'
+        self.caller = 'STRling'
    
     def filter_tsv_files(self):
         """
@@ -27,17 +28,19 @@ class STRlingExperiment(RepeatsExperiment):
         self.case_tsvs = []
         self.cont_tsvs = []
 
-        
+        cohort_subjects = pd.read_csv(self.csv_metadata).Subject.tolist()
         for file in os.listdir(self.tsv_dir):
             if file.endswith('-genotype.txt'):
                 subject, tissue = self.get_metadata_from_filename(file)
-                if not self.metadict['Tissue'] or tissue == self.metadict['Tissue']:
+                if subject in cohort_subjects and (self.metadict['Tissue'] == None or tissue == self.metadict['Tissue']):
                     subject_metadata = self.get_metadata_from_subject(subject)
                     add_flag = True
                     for key, val in self.metadict.items():
+                        if val == "all_apoe": val = None
+                        if val == "all_cohorts": val = None
                         if val and val != subject_metadata[key]:
                             add_flag = False
-                            break
+                            continue
                     if add_flag:
                         file_path = os.path.join(self.tsv_dir, file)
                         if subject_metadata["Diagnosis"] != "Unknown":
@@ -46,6 +49,7 @@ class STRlingExperiment(RepeatsExperiment):
                                 self.case_tsvs.append(file_path)
                             elif subject_metadata["Diagnosis"] == "Control":
                                 self.cont_tsvs.append(file_path)
+
 
     @staticmethod
     def filter_variants(tsv_df, chrom):
@@ -190,3 +194,4 @@ class STRlingExperiment(RepeatsExperiment):
         pool.close()
         pool.join()
         self.filter_tsv_files()
+

@@ -19,6 +19,7 @@ class EHDNExperiment(RepeatsExperiment):
         ]
         self.test_variable = 'allele_est'
         self.lrdn_files = None
+        self.caller = "EHDN"
 
 
     @staticmethod
@@ -41,16 +42,19 @@ class EHDNExperiment(RepeatsExperiment):
         self.case_tsvs = []
         self.cont_tsvs = []
         
+        cohort_subjects = pd.read_csv(self.csv_metadata).Subject.tolist()
         for file in os.listdir(self.tsv_dir):
             if file.endswith('locus.tsv'):
                 subject, tissue = self.get_metadata_from_filename(file)
-                if not self.metadict["Tissue"] or tissue == self.metadict["Tissue"]:
+                if subject in cohort_subjects and (self.metadict['Tissue'] == None or tissue == self.metadict['Tissue']):
                     subject_metadata = self.get_metadata_from_subject(subject)
                     add_flag = True
                     for key, val in self.metadict.items():
+                        if val == "all_apoe": val = None
+                        if val == "all_cohorts": val = None
                         if val and val != subject_metadata[key]:
                             add_flag = False
-                            break
+                            continue
                     if add_flag:
                         file_path = os.path.join(self.tsv_dir, file)
                         if subject_metadata["Diagnosis"] != "Unknown":
@@ -189,39 +193,51 @@ class EHDNExperiment(RepeatsExperiment):
         p_values = []
         processed_samples = []
         chrom = row[0]
-        left = row[1]['start']
+        left = row['start']
         case_names = []
         case_counts = []
         cont_names = []
         cont_counts = []
         split = row["counts"].split(",")
+        errors = 0
         for entry in split:
             s = entry.split(":")
-            subject_metadata = self.get_metadata_from_subject(s[0])
-            if subject_metadata["Diagnosis"] != "Unknown":
-                continue
-            elif subject_metadata["Diagnosis"] == "Case":
-                case_names.append(s[0])
-                case_counts.append(s[1])
-            elif subject_metadata["Diagnosis"] == "Control":
-                cont_names.append(s[0])
-                cont_counts.append(s[1])
-            
-            processed_samples.append(s[0])
-
-        # add uncalled samples to the dataframe (assume they are unexpanded)
-        for file in self.lrdn_files:
-            sample = file.split("_vcpa")[0]
-            if sample not in processed_samples:
-                subject_metadata = self.get_metadata_from_subject(s[0])
+            subject, _ = self.get_metadata_from_filename(s[0])
+            try:
+                subject_metadata = self.get_metadata_from_subject(subject)
                 if subject_metadata["Diagnosis"] != "Unknown":
                     continue
                 elif subject_metadata["Diagnosis"] == "Case":
-                    case_names.append(sample)
-                    case_counts.append(0)
+                    case_names.append(subject)
+                    case_counts.append(s[1])
                 elif subject_metadata["Diagnosis"] == "Control":
-                    cont_names.append(0)
-                    cont_counts.append(sample)
+                    cont_names.append(subject)
+                    cont_counts.append(s[1])
+                
+                processed_samples.append(subject)
+            except:
+                print("error getting metadata for subject: ", subject)
+                errors += 1
+                continue
+
+        # add uncalled samples to the dataframe (assume they are unexpanded)
+        for file in self.lrdn_files:
+            subject, _ = self.get_metadata_from_filename(file)
+            try:
+                if subject not in processed_samples:
+                    subject_metadata = self.get_metadata_from_subject(subject)
+                    if subject_metadata["Diagnosis"] != "Unknown":
+                        continue
+                    elif subject_metadata["Diagnosis"] == "Case":
+                        case_names.append(subject)
+                        case_counts.append(0)
+                    elif subject_metadata["Diagnosis"] == "Control":
+                        cont_names.append(0)
+                        cont_counts.append(subject)
+            except:
+                print("error getting metadata for subject: ", subject)
+                errors += 1
+                continue
 
         if len(processed_samples) < 200:
             return None
@@ -243,7 +259,7 @@ class EHDNExperiment(RepeatsExperiment):
         p_values.append(p_value)
 
         progress = i / len(self.lrdn_files) * 100
-        print(f"#### Progress: {progress:.2f}% [{i}/{len(self.lrdn_files)}] ########################################\r", end='')
+        #print(f"#### Progress: {progress:.2f}% [{i}/{len(self.lrdn_files)}] ########################################", end='')
 
         return {
             'chrom': chrom,
@@ -272,42 +288,44 @@ class EHDNExperiment(RepeatsExperiment):
 
         print("Processing LRDN variants...")
 
-        # Parallelize the summarize_chromosome function for each chromosome
-        df = pd.read_csv(merge_file, sep='\t')
-        for result in pool.imap_unordered(self.lrdn_process_chromosome, [(i,row) for i, row in df.iterrows()]):
-            if result is not None:
+        for chrom in self.chroms:
+            # Parallelize the summarize_chromosome function for each chromosome
+            df = pd.read_csv(merge_file, sep='\t')
+            df = df[df['contig'] == chrom]
+            for result in pool.imap_unordered(self.lrdn_process_chromosome, [(i,row) for i, row in df.iterrows()]):
+                if result is not None:
 
-                significant_variants.append({
-                    'chrom': result['chrom'],
-                    'mean_left': result['mean_left'],
-                    'std_dev': result['std_dev'],
-                    'variant': result['variant'],
-                    #'effect': effect, 
-                    'statistic': result['statistic'],
-                    'p_value': result['p_value'],
-                    'case_values': result['case_vals'],
-                    'control_values': result['cont_vals'],
-                    'recovered_variants': result['recovered_variants'],
-                    'actual_variants': result['actual_variants'],
-                    'warning':  result['warning'],
-                    'multi_expansions': result['multi_expansions']
-                })
-                
-        # Close the pool and wait for all processes to finish
-        pool.close()
-        pool.join()
+                    significant_variants.append({
+                        'chrom': result['chrom'],
+                        'mean_left': result['mean_left'],
+                        'std_dev': result['std_dev'],
+                        'variant': result['variant'],
+                        #'effect': effect, 
+                        'statistic': result['statistic'],
+                        'p_value': result['p_value'],
+                        'case_values': result['case_vals'],
+                        'control_values': result['cont_vals'],
+                        'recovered_variants': result['recovered_variants'],
+                        'actual_variants': result['actual_variants'],
+                        'warning':  result['warning'],
+                        'multi_expansions': result['multi_expansions']
+                    })
+                    
+            # Close the pool and wait for all processes to finish
+            pool.close()
+            pool.join()
 
-        # Perform multiple testing correction
-        p_values = [variant['p_value'] for variant in significant_variants]
-        reject, p_corrected, _, _ = multipletests(p_values, method='fdr_bh')
+            # Perform multiple testing correction
+            p_values = [variant['p_value'] for variant in significant_variants]
+            reject, p_corrected, _, _ = multipletests(p_values, method='fdr_bh')
 
-        for i, variant in enumerate(significant_variants):
-            variant['p_corrected'] = p_corrected[i]
-            variant['reject_null'] = reject[i]
+            for i, variant in enumerate(significant_variants):
+                variant['p_corrected'] = p_corrected[i]
+                variant['reject_null'] = reject[i]
 
-        self.WT_df = pd.DataFrame(significant_variants)
-        self.WT_df.sort_values('p_corrected', inplace=True, ascending=True)
-        self.WT_df.to_csv(f"results/{chrom}-{self.test}-lrdn.csv")
+            self.WT_df = pd.DataFrame(significant_variants)
+            self.WT_df.sort_values('p_corrected', inplace=True, ascending=True)
+            self.WT_df.to_csv(f"results/LRDN_{self.test}_lrdn.csv")
 
 
         return None    

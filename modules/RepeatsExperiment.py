@@ -22,6 +22,23 @@ class RepeatsExperiment:
         self.slop = slop
         self.slop_modifier = slop_modifier
         self.test = test
+        self.caller = "None"
+
+        if cohort is None:
+            cohort = "all_cohorts"
+            self.cohort = cohort
+        else:
+            # make a manifest of only the specifid cohort
+            manifest_df = pd.read_csv(self.csv_metadata)
+            self.csv_metadata = os.path.join("manifests", os.path.basename(csv_metadata).split(".")[0] + "_" + cohort + ".csv")
+            manifest_df[manifest_df['Cohort'] == cohort].to_csv(self.csv_metadata)
+
+        if apoe is None:
+            apoe = "all_apoe"
+        else:
+            manifest_df = pd.read_csv(self.csv_metadata)
+            self.csv_metadata = os.path.join("manifests", os.path.basename(csv_metadata).split(".")[0] + "_" + apoe + ".csv")
+            manifest_df[manifest_df['APOE'] == apoe].to_csv(self.csv_metadata)
 
         if self.test == "AD":
             warnings.warn("")
@@ -35,6 +52,11 @@ class RepeatsExperiment:
             chroms = [chroms]
         
         self.chroms = chroms
+        self.cohort = cohort
+        self.apoe = apoe
+
+        print(self.csv_metadata)
+
             
         self.metadict = {
             "Sex": sex,
@@ -60,7 +82,6 @@ class RepeatsExperiment:
             tissue = basename.split("-")[3]
 
         return subject, tissue
-
 
 
     @staticmethod
@@ -276,11 +297,11 @@ class RepeatsExperiment:
             
             iteration += 1
 
-        progress = iteration / len(self.tsvs) * 100
-        print(f"#### Progress: {progress:.2f}% [{iteration}/{len(self.tsvs) }] ########################################\r", end='')
+            progress = iteration / len(self.tsvs) * 100
+            #print(f"#### Progress: {progress:.2f}% [{iteration}/{len(self.tsvs) }] ########################################", end='')
 
             # write to file
-        dff.to_csv(f"results/strling_summary_{chrom}.csv")
+        dff.to_csv(f"results/strling_summary_{chrom}_{self.cohort}_{self.apoe}.csv")
 
         return
 
@@ -403,7 +424,7 @@ class RepeatsExperiment:
         }
     
 
-    def perform_stat_test(self, summary_df, out_file=None):
+    def perform_stat_test(self, summary_df):
         """
         Perform the Wilcoxon rank sum test on case and control allele2_size values to determine significant variants
         """
@@ -437,7 +458,7 @@ class RepeatsExperiment:
 
                 processed_variants += 1
                 progress = processed_variants / total_variants * 100
-                print(f"Progress: {progress:.2f}% [{processed_variants}/{total_variants}] ########################################\r", end='')
+                #print(f"Progress: {progress:.2f}% [{processed_variants}/{total_variants}] ########################################\r", end='')
 
         pool.close()  # Close the multiprocessing Pool
         pool.join()   # Wait for all processes to finish
@@ -453,7 +474,6 @@ class RepeatsExperiment:
         self.WT_df = pd.DataFrame(significant_variants)
         self.WT_df.sort_values('p_corrected', inplace=True, ascending=True)
 
-        if out_file:
-            self.WT_df.to_csv(out_file)
+        self.WT_df.to_csv(f"results/{self.caller}_{self.test}_{self.cohort}_{self.apoe}.csv", index=False)
 
         return self.WT_df
