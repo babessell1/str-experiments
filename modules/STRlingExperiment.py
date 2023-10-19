@@ -32,13 +32,14 @@ class STRlingExperiment(RepeatsExperiment):
         for file in os.listdir(self.tsv_dir):
             if file.endswith('-genotype.txt'):
                 subject, tissue = self.get_metadata_from_filename(file)
-                if subject in cohort_subjects and (self.metadict['Tissue'] == None or tissue == self.metadict['Tissue']):
+                if (subject in cohort_subjects or cohort_subjects == "all_cohorts") and (self.metadict['Tissue'] == None or tissue == self.metadict['Tissue']):
                     subject_metadata = self.get_metadata_from_subject(subject)
                     add_flag = True
                     for key, val in self.metadict.items():
                         if val == "all_apoe": val = None
                         if val == "all_cohorts": val = None
                         if val and val != subject_metadata[key]:
+                            print(val, subject_metadata[key])
                             add_flag = False
                             continue
                     if add_flag:

@@ -46,13 +46,14 @@ class EHDNExperiment(RepeatsExperiment):
         for file in os.listdir(self.tsv_dir):
             if file.endswith('locus.tsv'):
                 subject, tissue = self.get_metadata_from_filename(file)
-                if subject in cohort_subjects and (self.metadict['Tissue'] == None or tissue == self.metadict['Tissue']):
+                if (subject in cohort_subjects or cohort_subjects == "all_cohorts") and (self.metadict['Tissue'] == None or tissue == self.metadict['Tissue']):
                     subject_metadata = self.get_metadata_from_subject(subject)
                     add_flag = True
                     for key, val in self.metadict.items():
                         if val == "all_apoe": val = None
                         if val == "all_cohorts": val = None
                         if val and val != subject_metadata[key]:
+                            print(val, subject_metadata[key])
                             add_flag = False
                             continue
                     if add_flag:
@@ -189,6 +190,7 @@ class EHDNExperiment(RepeatsExperiment):
         SAMPLE_VAL: chr1    1000    1001    SAMPLE_NAME_1:{normalized counts},SAMPLE_NAME_2:{normalized counts},...
         """
         i = iter[0]
+        #print(f"## {i} iter... ##", end='\r')
         row = iter[1]
         p_values = []
         processed_samples = []
@@ -203,44 +205,47 @@ class EHDNExperiment(RepeatsExperiment):
         for entry in split:
             s = entry.split(":")
             subject, _ = self.get_metadata_from_filename(s[0])
-            try:
+            subject_metadata = self.get_metadata_from_subject(subject)
+            print(subject_metadata['Diagnosis'])
+            if subject_metadata["Diagnosis"] == "Unknown":
+                continue
+            elif subject_metadata["Diagnosis"] == "Case":
+                case_names.append(subject)
+                case_counts.append(s[1])
+            elif subject_metadata["Diagnosis"] == "Control":
+                cont_names.append(subject)
+                cont_counts.append(s[1])
+            
+            processed_samples.append(subject)
+
+        if len(processed_samples) < 100:
+            #print(f"## {i} not enough samples... ##", end='\r')
+            return None
+
+        print(f"## {i} adding uncalled samples... ##", end='\r')
+        # add uncalled samples to the dataframe (assume they are unexpanded)
+        print(f"number of lrdn files: {len(self.lrdn_files)}")
+        for file in self.lrdn_files:
+            subject, _ = self.get_metadata_from_filename(file)
+            if i == 1:
+                print(f"{i} {subject}")
+            if subject not in processed_samples:
                 subject_metadata = self.get_metadata_from_subject(subject)
-                if subject_metadata["Diagnosis"] != "Unknown":
+
+                if subject_metadata["Diagnosis"] == "Unknown":
                     continue
                 elif subject_metadata["Diagnosis"] == "Case":
                     case_names.append(subject)
-                    case_counts.append(s[1])
+                    case_counts.append(0)
+                    if i == 1:
+                        print(f"{i} {subject} case")
                 elif subject_metadata["Diagnosis"] == "Control":
-                    cont_names.append(subject)
-                    cont_counts.append(s[1])
-                
-                processed_samples.append(subject)
-            except:
-                print("error getting metadata for subject: ", subject)
-                errors += 1
-                continue
-
-        # add uncalled samples to the dataframe (assume they are unexpanded)
-        for file in self.lrdn_files:
-            subject, _ = self.get_metadata_from_filename(file)
-            try:
-                if subject not in processed_samples:
-                    subject_metadata = self.get_metadata_from_subject(subject)
-                    if subject_metadata["Diagnosis"] != "Unknown":
-                        continue
-                    elif subject_metadata["Diagnosis"] == "Case":
-                        case_names.append(subject)
-                        case_counts.append(0)
-                    elif subject_metadata["Diagnosis"] == "Control":
-                        cont_names.append(0)
-                        cont_counts.append(subject)
-            except:
-                print("error getting metadata for subject: ", subject)
-                errors += 1
-                continue
-
-        if len(processed_samples) < 200:
-            return None
+                    if i == 1:
+                        print(f"{i} {subject} cont")
+                    cont_names.append(0)
+                    cont_counts.append(subject)
+        
+        print(f"## {i} performing statistical test... ##", end='\r')
 
         if self.test == "KS":
             # perform Kolmogorov-Smirnov test
@@ -259,7 +264,7 @@ class EHDNExperiment(RepeatsExperiment):
         p_values.append(p_value)
 
         progress = i / len(self.lrdn_files) * 100
-        #print(f"#### Progress: {progress:.2f}% [{i}/{len(self.lrdn_files)}] ########################################", end='')
+        print(f"#### Progress: {progress:.2f}% [{i}/{len(self.lrdn_files)}] ########################################", end='\r')
 
         return {
             'chrom': chrom,
@@ -278,7 +283,7 @@ class EHDNExperiment(RepeatsExperiment):
         }
 
 
-    def process_lrdn(self, merge_file, test="KS"):
+    def process_lrdn(self, merge_file):
         # Create a multiprocessing Pool
 
         significant_variants = []
@@ -292,7 +297,9 @@ class EHDNExperiment(RepeatsExperiment):
             # Parallelize the summarize_chromosome function for each chromosome
             df = pd.read_csv(merge_file, sep='\t')
             df = df[df['contig'] == chrom]
-            for result in pool.imap_unordered(self.lrdn_process_chromosome, [(i,row) for i, row in df.iterrows()]):
+            # sort the merge file by start position
+            df.sort_values(['start'], inplace=True)
+            for result in pool.imap_unordered(self.lrdn_process_chromosome, [(i,row) for (i, row) in df.iterrows()]):
                 if result is not None:
 
                     significant_variants.append({
@@ -325,7 +332,6 @@ class EHDNExperiment(RepeatsExperiment):
 
             self.WT_df = pd.DataFrame(significant_variants)
             self.WT_df.sort_values('p_corrected', inplace=True, ascending=True)
-            self.WT_df.to_csv(f"results/LRDN_{self.test}_lrdn.csv")
+            self.WT_df.to_csv(f"results/LRDN_{self.test}_{self.chroms}_{self.cohort}_{self.apoe}lrdn.csv", index=False)
 
-
-        return None    
+        return  

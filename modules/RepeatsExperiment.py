@@ -24,7 +24,7 @@ class RepeatsExperiment:
         self.test = test
         self.caller = "None"
 
-        if cohort is None:
+        if cohort is None or cohort == "all_cohorts":
             cohort = "all_cohorts"
             self.cohort = cohort
         else:
@@ -33,12 +33,16 @@ class RepeatsExperiment:
             self.csv_metadata = os.path.join("manifests", os.path.basename(csv_metadata).split(".")[0] + "_" + cohort + ".csv")
             manifest_df[manifest_df['Cohort'] == cohort].to_csv(self.csv_metadata)
 
-        if apoe is None:
+        if apoe is None or apoe == "all_apoe":
             apoe = "all_apoe"
         else:
             manifest_df = pd.read_csv(self.csv_metadata)
+            # remove nans APOE
+            manifest_df = manifest_df[manifest_df['APOE'].notna()]
+            # APOE column should be an string
+            manifest_df['APOE'] = manifest_df['APOE'].astype(int).astype(str)
             self.csv_metadata = os.path.join("manifests", os.path.basename(csv_metadata).split(".")[0] + "_" + apoe + ".csv")
-            manifest_df[manifest_df['APOE'] == apoe].to_csv(self.csv_metadata)
+            manifest_df[manifest_df['APOE'] == str(apoe)].to_csv(self.csv_metadata)
 
         if self.test == "AD":
             warnings.warn("")
@@ -53,9 +57,17 @@ class RepeatsExperiment:
         
         self.chroms = chroms
         self.cohort = cohort
+
+        # coerce apoe to string of int if possible
+        if apoe is not None:
+            if type(apoe) is not str:
+                apoe = str(int(apoe))
+
         self.apoe = apoe
 
         print(self.csv_metadata)
+
+        # if coha
 
             
         self.metadict = {
@@ -154,9 +166,12 @@ class RepeatsExperiment:
             'Race': meta_df.loc[meta_df['Subject'] == subject, 'Race'].values[0],
             'Ethnicity': meta_df.loc[meta_df['Subject'] == subject, 'Ethnicity'].values[0],
             'Diagnosis': meta_df.loc[meta_df['Subject'] == subject, 'Diagnosis'].values[0],
-            'APOE': meta_df.loc[meta_df['Subject'] == subject, 'APOE'].values[0],
             'Assay': meta_df.loc[meta_df['Subject'] == subject, 'Assay'].values[0],
         }
+        if self.apoe is not None and self.apoe != "all_apoe":
+            subject_metadata['APOE'] = meta_df.loc[meta_df['Subject'] == subject, 'APOE'].values[0].astype(int).astype(str)
+        else:
+            subject_metadata['APOE'] = meta_df.loc[meta_df['Subject'] == subject, 'APOE'].values[0]
 
         return subject_metadata
 
@@ -259,8 +274,12 @@ class RepeatsExperiment:
 
 
     def summarize_chromosome(self, chrom):
+        # make log file
+        #log_file = open(f"logs/{self.caller}_summary_{chrom}_{self.cohort}_{self.apoe}.log", "w")
         df1 = pd.read_csv(self.tsvs[0], sep='\t')
+        df1 = df1[df1['#chrom'] == chrom]
         df2 = pd.read_csv(self.tsvs[1], sep='\t')
+        df2 = df2[df2['#chrom'] == chrom]
         dff = pd.concat([df1, df2])
         dff["mean_left"] = dff["left"]
         dff["counts"] = np.ones(dff.shape[0])
@@ -276,6 +295,7 @@ class RepeatsExperiment:
         for file in self.tsvs[start_idx:]:
             files_processed += 1
             next_df = pd.read_csv(file, sep='\t')
+            next_df = next_df[next_df['#chrom'] == chrom]
             next_df["counts"] = np.ones(next_df.shape[0])
             next_df["variance_left"] = np.zeros(next_df.shape[0])
             next_df["mean_left"] = next_df["left"]
@@ -298,10 +318,15 @@ class RepeatsExperiment:
             iteration += 1
 
             progress = iteration / len(self.tsvs) * 100
-            #print(f"#### Progress: {progress:.2f}% [{iteration}/{len(self.tsvs) }] ########################################", end='')
+            # write progress to logs
+            #log_file.write(f"#### {chrom} Progress: {progress:.2f}% [{iteration}/{len(self.tsvs) }] ##\n")
+
+            # print progress every 20th iteration
+            if iteration % 20 == 0:
+                print(f"## {chrom} Progress: {progress:.2f}% [{iteration}/{len(self.tsvs) }] ##", end='\r')
 
             # write to file
-        dff.to_csv(f"results/strling_summary_{chrom}_{self.cohort}_{self.apoe}.csv")
+        dff.to_csv(f"results/{self.caller}_summary_{chrom}_{self.cohort}_{self.apoe}.csv")
 
         return
 
@@ -311,13 +336,13 @@ class RepeatsExperiment:
 
         if summary_csv:
             return pd.read_csv(summary_csv)
+        
 
         # Create a multiprocessing Pool
         pool = multiprocessing.Pool()
 
         # Parallelize the summarize_chromosome function for each chromosome
-        for chrom in self.chroms:
-            pool.apply(self.summarize_chromosome, args=(chrom,))
+        pool.imap_unordered(self.summarize_chromosome, self.chroms)
 
         # Close the pool and wait for all processes to finish
         pool.close()
@@ -325,10 +350,12 @@ class RepeatsExperiment:
 
         return None
 
-    def par_process_variant(self, variant_row):
+    def par_process_variant(self, iter):
         """
         Match each variant in a summary df to all corresponding variants in each subject df to extract case and control allele2 estimate sizes for each variant (defined by a row in the summary df). This can be done in parallel
         """
+        i = iter[0]
+        variant_row = iter[1]
         variant = variant_row['repeatunit']
         mean_left = variant_row['mean_left']
         std_left = np.sqrt(variant_row['variance_left'])
@@ -388,9 +415,10 @@ class RepeatsExperiment:
 
         total_found = len([val for val in case_vals if np.abs(val)>0] + [val for val in cont_vals if np.abs(val>0)])
         #print(f"counts: {variant_row['counts']} vs {total_found}")
-
+        if i % 20 == 0:
+            print(f"## Progress: {i}/{self.total_to_process} | total_found: {total_found} ##", end='\r')
         # dont bother testing if the amount of expansions is low
-        if sum(val > 0 for val in case_vals) + sum(val > 0 for val in cont_vals) < 200:
+        if sum(val > 0 for val in case_vals) + sum(val > 0 for val in cont_vals) < 10:
             return None
 
         if self.test == "KS":
@@ -431,13 +459,14 @@ class RepeatsExperiment:
         significant_variants = []
 
         total_variants = len(summary_df)
+        self.total_to_process = total_variants
         processed_variants = 0
 
         pool = multiprocessing.Pool()  # Create a multiprocessing Pool
 
         #summary_df = summary_df[summary_df['repeatunit'] == "AT"]
         
-        for result in pool.imap_unordered(self.par_process_variant, [row for _, row in summary_df.iterrows()]):
+        for result in pool.imap_unordered(self.par_process_variant, [(i, row) for (i, row) in summary_df.iterrows()]):
         # The rest of the code remains the same
             if result is not None:
                 significant_variants.append({
@@ -471,9 +500,14 @@ class RepeatsExperiment:
             variant['p_corrected'] = p_corrected[i]
             variant['reject_null'] = reject[i]
 
+        # convert list of chromosomes to string
+        if len(self.chroms) == 1:
+            chroms = self.chroms[0]
+        else:
+            chroms = "_".join(self.chroms)
+
         self.WT_df = pd.DataFrame(significant_variants)
         self.WT_df.sort_values('p_corrected', inplace=True, ascending=True)
+        self.WT_df.to_csv(f"results/{self.caller}_{self.test}_{chroms}_{self.cohort}_{self.apoe}.csv", index=False)
 
-        self.WT_df.to_csv(f"results/{self.caller}_{self.test}_{self.cohort}_{self.apoe}.csv", index=False)
-
-        return self.WT_df
+        return

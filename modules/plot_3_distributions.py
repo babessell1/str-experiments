@@ -1,5 +1,6 @@
 import seaborn as sns
 import matplotlib.pyplot as plt
+import numpy as np
 
 def rev_complement(motif):
         rev_dict = {
@@ -53,7 +54,7 @@ def is_rotation(str1, str2):
     # string 2 not found as substring
     return False
 
-def create_split_violin_plots_compare_3(df1, df2, df3, slop=5000*10):
+def create_3_plots(df1, df2, df3, slop=5000*10):
     # Filter DataFrame for variants with p-value < 0.3
     #filtered_df = WT_df1[WT_df1['variant'] == "ACGGGGAGAGGGAGAGGGAG"]
     #print(filtered_df)
