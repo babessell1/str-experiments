@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore", category=UserWarning, message="p-value capped:
 class RepeatsExperiment:
     def __init__(self, tsv_dir, csv_metadata, chroms="All", sex=None, tissue=None,
                  dataset=None, cohort=None, race=None, ethnicity=None, apoe=None, 
-                 slop=100, slop_modifier=1.5, test="AD"
+                 slop=100, slop_modifier=1.5, test="KS"
     ):
         self.test_variable = None
         self.tsv_dir = tsv_dir
