@@ -11,9 +11,9 @@ from modules.RepeatsExperiment import RepeatsExperiment
 class STRlingExperiment(RepeatsExperiment):
     def __init__(self, tsv_dir, csv_metadata, chroms="All", sex=None, tissue=None,
                  dataset=None, cohort=None, race=None, ethnicity=None, apoe=None, 
-                slop=100, slop_modifier=1.5, test="KS"
+                slop=100, slop_modifier=1.5, test="KS", motifs_to_drop=[]
     ):
-        super().__init__(tsv_dir, csv_metadata, chroms, sex, tissue, dataset, cohort, race, ethnicity, apoe, slop, slop_modifier, test)
+        super().__init__(tsv_dir, csv_metadata, chroms, sex, tissue, dataset, cohort, race, ethnicity, apoe, slop, slop_modifier, test, motifs_to_drop)
         self.cols_to_drop = [
             'allele1_est', 'allele2_est', 'right', 'merged_expansions'
                 ]
@@ -178,21 +178,49 @@ class STRlingExperiment(RepeatsExperiment):
 
             # Write the result to an output file
             tsv_file_name = os.path.basename(tsv_file)
+            # make sure the motif directory exists
+
             out_file_path = os.path.join(out_dir, tsv_file_name)
             new_df.to_csv(out_file_path, sep='\t', index=False)
         except:
             print("failed to process tsv file: ", tsv_file)
             return
-    
+        
+    def seperate_tsvs_by_motif(self, tsvs):
+        """
+        For each tsv, get each unique motif, create a directory for
+        that motif if it doesn't exist, filter the tsv by the motif,
+        and write the filtered tsv to the motif directory.
+        """
+        all_motifs = set()
+        for tsv in tsvs:
+            df = pd.read_csv(tsv, sep='\t')
+            motifs = df.repeatunit.unique()
+            all_motifs.update(motifs)
+            for motif in motifs:
+                motif_dir = os.path.join(self.out_dir, motif)
+                if not os.path.exists(motif_dir):
+                    os.mkdir(motif_dir)
+                motif_tsv = df[df.repeatunit == motif]
+                motif_tsv.to_csv(os.path.join(motif_dir, os.path.basename(tsv)), sep='\t', index=False)
 
+        # write all found motifs to a file
+        motif_df = pd.DataFrame(list(all_motifs), columns=['motif'])
+        motif_df.to_csv(os.path.join(f'{self.caller}_motifs.txt'), sep='\t', index=False)
+
+    
     def collapse_sample_tsvs(self, in_dir, out_dir):
         """
         Parallelize the collapsing of sample TSV files.
         """
         print("Collapsing individual STRling TSV files...")
-        pool = multiprocessing.Pool()
-        pool.starmap(self.process_tsv_file, [(os.path.join(in_dir, file), out_dir) for file in os.listdir(in_dir) if file.endswith('-genotype.txt')])
-        pool.close()
-        pool.join()
-        self.filter_tsv_files()
-
+        for motif in os.listdir(in_dir):
+            motif_dir = os.path.join(in_dir, motif)
+            motif_out_dir = os.path.join(out_dir, motif)
+            if not os.path.exists(motif_out_dir):
+                os.mkdir(motif_out_dir)
+            pool = multiprocessing.Pool()
+            pool.starmap(self.process_tsv_file, [(os.path.join(motif_dir, file), motif_out_dir) for file in os.listdir(motif_dir) if file.endswith('-genotype.txt')])
+            pool.close()
+            pool.join()
+            self.filter_tsv_files()

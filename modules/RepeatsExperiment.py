@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore", category=UserWarning, message="p-value capped:
 class RepeatsExperiment:
     def __init__(self, tsv_dir, csv_metadata, chroms="All", sex=None, tissue=None,
                  dataset=None, cohort=None, race=None, ethnicity=None, apoe=None, 
-                 slop=100, slop_modifier=1.5, test="KS"
+                 slop=100, slop_modifier=1.5, test="KS", motifs_to_drop=[]
     ):
         self.test_variable = None
         self.tsv_dir = tsv_dir
@@ -23,6 +23,7 @@ class RepeatsExperiment:
         self.slop_modifier = slop_modifier
         self.test = test
         self.caller = "None"
+        self.motifs_to_drop = motifs_to_drop
 
         if cohort is None or cohort == "all_cohorts":
             cohort = "all_cohorts"
@@ -271,15 +272,35 @@ class RepeatsExperiment:
         new_df = pd.DataFrame(collapsed_variants)
 
         return new_df
+    
+    @staticmethod
+    def add_motif_dir_to_tsv_path(tsv, motif):
+        """
+        Add the motif directory to the second to last position in the tsv path
+        """
+        tsv_split = tsv.split("/")
+        tsv_split.insert(-1, motif)
+        return "/".join(tsv_split)
 
 
-    def summarize_chromosome(self, chrom):
+    def summarize(self, chrom, motif=None):
         # make log file
         #log_file = open(f"logs/{self.caller}_summary_{chrom}_{self.cohort}_{self.apoe}.log", "w")
-        df1 = pd.read_csv(self.tsvs[0], sep='\t')
+    
+        # get subset of expanded variants for the chromosome and motif
+        tsv_to_read = self.add_motif_dir_to_tsv_path(self.tsvs[0], motif)
+        df1 = pd.read_csv(tsv_to_read, sep='\t')
         df1 = df1[df1['#chrom'] == chrom]
-        df2 = pd.read_csv(self.tsvs[1], sep='\t')
+        if motif is not None:
+            df1 = df1[df1['repeatunit'] == motif]
+
+        tsv_to_read = self.add_motif_dir_to_tsv_path(self.tsvs[1], motif)
+        df2 = pd.read_csv(tsv_to_read, sep='\t')
         df2 = df2[df2['#chrom'] == chrom]
+        if motif is not None:
+            df2 = df2[df2['repeatunit'] == motif]
+
+        # merge the two dataframes to create ongoing aggregate dataframe
         dff = pd.concat([df1, df2])
         dff["mean_left"] = dff["left"]
         dff["counts"] = np.ones(dff.shape[0])
@@ -294,7 +315,8 @@ class RepeatsExperiment:
         iteration = 1
         for file in self.tsvs[start_idx:]:
             files_processed += 1
-            next_df = pd.read_csv(file, sep='\t')
+            tsv_to_read = self.add_motif_dir_to_tsv_path(file, motif)
+            next_df = pd.read_csv(tsv_to_read, sep='\t')
             next_df = next_df[next_df['#chrom'] == chrom]
             next_df["counts"] = np.ones(next_df.shape[0])
             next_df["variance_left"] = np.zeros(next_df.shape[0])
@@ -326,8 +348,16 @@ class RepeatsExperiment:
                 print(f"## {chrom} Progress: {progress:.2f}% [{iteration}/{len(self.tsvs) }] ##", end='\r')
 
             # write to file
-        dff.to_csv(f"results/{self.caller}_summary_{chrom}_{self.cohort}_{self.apoe}.csv")
-
+                
+        if motif is None:
+            motif = ""
+        
+        # don't write to file if no variants found
+        if dff.shape[0] == 0:
+            return
+        
+        dff.to_csv(f"results/{self.caller}_summary_{chrom}_{self.cohort}_{self.apoe}_{motif}.csv")
+        
         return
 
     
@@ -337,12 +367,16 @@ class RepeatsExperiment:
         if summary_csv:
             return pd.read_csv(summary_csv)
         
+        motif_df = pd.read_csv(os.path.join(f'{self.caller}_motifs.txt'))
+        motifs = motif_df['motif'].tolist()
+        chromosomes = self.chroms
+    
 
         # Create a multiprocessing Pool
         pool = multiprocessing.Pool()
 
-        # Parallelize the summarize_chromosome function for each chromosome
-        pool.imap_unordered(self.summarize_chromosome, self.chroms)
+        # Parallelize the summarize function for each chromosome and motif combination
+        pool.imap_unordered(self.summarize, [(chrom, motif) for chrom in chromosomes for motif in motifs])
 
         # Close the pool and wait for all processes to finish
         pool.close()

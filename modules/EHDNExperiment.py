@@ -167,18 +167,46 @@ class EHDNExperiment(RepeatsExperiment):
         tsv_file_name = os.path.basename(tsv_file)
         out_file_path = os.path.join(out_dir, tsv_file_name)
         new_df.to_csv(out_file_path, sep='\t', index=False)
-    
+
+    def seperate_tsvs_by_motif(self, tsvs):
+        """
+        For each tsv, get each unique motif, create a directory for
+        that motif if it doesn't exist, filter the tsv by the motif,
+        and write the filtered tsv to the motif directory.
+        """
+        all_motifs = set()
+        for tsv in tsvs:
+            df = pd.read_csv(tsv, sep='\t')
+            motifs = df.motif.unique()
+            all_motifs.update(motifs)
+            for motif in motifs:
+                motif_dir = os.path.join(self.tsv_dir, motif)
+                if not os.path.exists(motif_dir):
+                    os.mkdir(motif_dir)
+                motif_df = df[df['motif'] == motif]
+                motif_df.to_csv(os.path.join(motif_dir, os.path.basename(tsv)), sep='\t', index=False)
+
+        # write all found motifs to a file
+        motif_df = pd.DataFrame(list(all_motifs), columns=['motif'])
+        motif_df.to_csv(os.path.join(f'{self.caller}_motifs.txt'), sep='\t', index=False)  
+        self.motifs = list(all_motifs)
+      
 
     def collapse_sample_tsvs(self, in_dir, out_dir):
         """
         Parallelize the collapsing of sample TSV files.
         """
         print("Collapsing individual EHDN TSV files...")
-        pool = multiprocessing.Pool()
-        pool.starmap(self.process_tsv_file, [(os.path.join(in_dir, file), out_dir) for file in os.listdir(in_dir) if file.endswith('locus.tsv')])
-        pool.close()
-        pool.join()
-        self.filter_tsv_files()
+        for motif in os.listdir(in_dir):
+            motif_dir = os.path.join(in_dir, motif)
+            motif_out_dir = os.path.join(out_dir, motif)
+            if not os.path.exists(motif_out_dir):
+                os.mkdir(motif_out_dir)
+            pool = multiprocessing.Pool()
+            pool.starmap(self.process_tsv_file, [(os.path.join(motif_dir, file), motif_out_dir) for file in os.listdir(motif_dir) if file.endswith('locus.tsv')])
+            pool.close()
+            pool.join()
+            self.filter_tsv_files()
 
     
     def lrdn_process_chromosome(self, iter):
@@ -299,7 +327,7 @@ class EHDNExperiment(RepeatsExperiment):
             df = df[df['contig'] == chrom]
             # sort the merge file by start position
             df.sort_values(['start'], inplace=True)
-            for result in pool.imap_unordered(self.lrdn_process_chromosome, [(i,row) for (i, row) in df.iterrows()]):
+            for result in pool.imap_unordered(self.lrdn_process_chromosome, [(i, row) for (i, row) in df.iterrows()]):
                 if result is not None:
 
                     significant_variants.append({
