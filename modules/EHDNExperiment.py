@@ -9,18 +9,18 @@ import multiprocessing
 from modules.RepeatsExperiment import RepeatsExperiment
 
 class EHDNExperiment(RepeatsExperiment):
-    def __init__(self, tsv_dir, csv_metadata, chroms="All", sex=None, tissue=None,
-                 dataset=None, cohort=None, race=None, ethnicity=None, apoe=None,
-                slop=100, slop_modifier=1.5, test="AD"
-    ):
-        super().__init__(tsv_dir, csv_metadata, chroms, sex, tissue, dataset, cohort, race, ethnicity, apoe, slop, slop_modifier, test)
+    def __init__(self, tsv_dir, csv_metadata, **kwargs):
+        super().__init__(tsv_dir, csv_metadata, **kwargs)
+        
         self.cols_to_drop = [
             'allele_est', 'right', 'merged_expansions'
         ]
         self.test_variable = 'allele_est'
         self.lrdn_files = None
         self.caller = "EHDN"
-
+        self.locus_file_extension = 'locus.tsv'
+        self.repeat_nomenclature = "motif"
+        
 
     @staticmethod
     def filter_variants(tsv_df, chrom):
@@ -32,44 +32,17 @@ class EHDNExperiment(RepeatsExperiment):
             filtered_df = filtered_df[filtered_df['contig'] == chrom]
 
         return filtered_df
-    
-
-    def filter_tsv_files(self):
-        """
-        Get case/control TSV file lists from the directory and filter files that adhere to desired covariates described by metadict
-        """
-        self.tsvs = []
-        self.case_tsvs = []
-        self.cont_tsvs = []
-        
-        cohort_subjects = pd.read_csv(self.csv_metadata).Subject.tolist()
-        for file in os.listdir(self.tsv_dir):
-            if file.endswith('locus.tsv'):
-                subject, tissue = self.get_metadata_from_filename(file)
-                if (subject in cohort_subjects or cohort_subjects == "all_cohorts") and (self.metadict['Tissue'] == None or tissue == self.metadict['Tissue']):
-                    subject_metadata = self.get_metadata_from_subject(subject)
-                    add_flag = True
-                    for key, val in self.metadict.items():
-                        if val == "all_apoe": val = None
-                        if val == "all_cohorts": val = None
-                        if val and val != subject_metadata[key]:
-                            print(val, subject_metadata[key])
-                            add_flag = False
-                            continue
-                    if add_flag:
-                        file_path = os.path.join(self.tsv_dir, file)
-                        if subject_metadata["Diagnosis"] != "Unknown":
-                            self.tsvs.append(file_path)
-                            if subject_metadata["Diagnosis"] == "Case":
-                                self.case_tsvs.append(file_path)
-                            elif subject_metadata["Diagnosis"] == "Control":
-                                self.cont_tsvs.append(file_path)
 
 
-    def process_tsv_file(self, tsv_file, out_dir):
+    def collapse_tsv_file(self, tsv_file, out_dir):
         """
         Process a single TSV file, collapsing variants.
         """
+
+        if os.stat(tsv_file).st_size == 0:
+            print(f"Skipping empty file: {tsv_file}")
+            return
+        
         subject, tissue = self.get_metadata_from_filename(tsv_file)
         df = pd.read_csv(tsv_file, sep='\t')
         df = self.filter_variants(df, "All")
@@ -167,46 +140,6 @@ class EHDNExperiment(RepeatsExperiment):
         tsv_file_name = os.path.basename(tsv_file)
         out_file_path = os.path.join(out_dir, tsv_file_name)
         new_df.to_csv(out_file_path, sep='\t', index=False)
-
-    def seperate_tsvs_by_motif(self, tsvs):
-        """
-        For each tsv, get each unique motif, create a directory for
-        that motif if it doesn't exist, filter the tsv by the motif,
-        and write the filtered tsv to the motif directory.
-        """
-        all_motifs = set()
-        for tsv in tsvs:
-            df = pd.read_csv(tsv, sep='\t')
-            motifs = df.motif.unique()
-            all_motifs.update(motifs)
-            for motif in motifs:
-                motif_dir = os.path.join(self.tsv_dir, motif)
-                if not os.path.exists(motif_dir):
-                    os.mkdir(motif_dir)
-                motif_df = df[df['motif'] == motif]
-                motif_df.to_csv(os.path.join(motif_dir, os.path.basename(tsv)), sep='\t', index=False)
-
-        # write all found motifs to a file
-        motif_df = pd.DataFrame(list(all_motifs), columns=['motif'])
-        motif_df.to_csv(os.path.join(f'{self.caller}_motifs.txt'), sep='\t', index=False)  
-        self.motifs = list(all_motifs)
-      
-
-    def collapse_sample_tsvs(self, in_dir, out_dir):
-        """
-        Parallelize the collapsing of sample TSV files.
-        """
-        print("Collapsing individual EHDN TSV files...")
-        for motif in os.listdir(in_dir):
-            motif_dir = os.path.join(in_dir, motif)
-            motif_out_dir = os.path.join(out_dir, motif)
-            if not os.path.exists(motif_out_dir):
-                os.mkdir(motif_out_dir)
-            pool = multiprocessing.Pool()
-            pool.starmap(self.process_tsv_file, [(os.path.join(motif_dir, file), motif_out_dir) for file in os.listdir(motif_dir) if file.endswith('locus.tsv')])
-            pool.close()
-            pool.join()
-            self.filter_tsv_files()
 
     
     def lrdn_process_chromosome(self, iter):

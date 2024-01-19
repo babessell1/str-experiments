@@ -1,57 +1,32 @@
-import pandas as pd
-import numpy as np
-from itertools import zip_longest
-import sys
+
 import os
 from scipy.stats import ranksums, ks_2samp
 from statsmodels.stats.multitest import multipletests
+import dask.dataframe as dd
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 import multiprocessing
+from itertools import product
+import pickle as pkl
 from modules.RepeatsExperiment import RepeatsExperiment
 
 class STRlingExperiment(RepeatsExperiment):
-    def __init__(self, tsv_dir, csv_metadata, chroms="All", sex=None, tissue=None,
-                 dataset=None, cohort=None, race=None, ethnicity=None, apoe=None, 
-                slop=100, slop_modifier=1.5, test="KS", motifs_to_drop=[]
-    ):
-        super().__init__(tsv_dir, csv_metadata, chroms, sex, tissue, dataset, cohort, race, ethnicity, apoe, slop, slop_modifier, test, motifs_to_drop)
+    def __init__(self, tsv_dir, csv_metadata, **kwargs):
+        super().__init__(tsv_dir, csv_metadata, **kwargs)
+        
         self.cols_to_drop = [
-            'allele1_est', 'allele2_est', 'right', 'merged_expansions'
-                ]
+            'allele1_est',
+            'allele2_est',
+            'right',
+            'merged_expansions'
+        ]
+
         self.test_variable = 'allele2_est'
         self.caller = 'STRling'
+        self.locus_file_extension = '-genotype.txt'
+        self.repeat_nomenclature = 'repeatunit'
    
-    def filter_tsv_files(self):
-        """
-        Get case/control TSV file lists from the directory and filter files that adhere to desired covariates described by metadict
-        """
-        self.tsvs = []
-        self.case_tsvs = []
-        self.cont_tsvs = []
-
-        cohort_subjects = pd.read_csv(self.csv_metadata).Subject.tolist()
-        for file in os.listdir(self.tsv_dir):
-            if file.endswith('-genotype.txt'):
-                subject, tissue = self.get_metadata_from_filename(file)
-                if (subject in cohort_subjects or cohort_subjects == "all_cohorts") and (self.metadict['Tissue'] == None or tissue == self.metadict['Tissue']):
-                    subject_metadata = self.get_metadata_from_subject(subject)
-                    add_flag = True
-                    for key, val in self.metadict.items():
-                        if val == "all_apoe": val = None
-                        if val == "all_cohorts": val = None
-                        if val and val != subject_metadata[key]:
-                            print(val, subject_metadata[key])
-                            add_flag = False
-                            continue
-                    if add_flag:
-                        file_path = os.path.join(self.tsv_dir, file)
-                        if subject_metadata["Diagnosis"] != "Unknown":
-                            self.tsvs.append(file_path)
-                            if subject_metadata["Diagnosis"] == "Case":
-                                self.case_tsvs.append(file_path)
-                            elif subject_metadata["Diagnosis"] == "Control":
-                                self.cont_tsvs.append(file_path)
-
-
     @staticmethod
     def filter_variants(tsv_df, chrom):
         """
@@ -63,24 +38,33 @@ class STRlingExperiment(RepeatsExperiment):
 
         return filtered_df
 
-
-    def process_tsv_file(self, tsv_file, out_dir):
+    def collapse_tsv_file(self, tsv_file, out_dir):
         """
         Process a single TSV file, collapsing variants.
         """
+
+        if os.stat(tsv_file).st_size == 0:
+            print(f"Skipping empty file: {tsv_file}")
+            return
+
         subject, tissue = self.get_metadata_from_filename(tsv_file)
+        
+        # NOTE: pandas is probably better than dask for this because the data is small and 
+        # we have to sort and reset indexes 
         df = pd.read_csv(tsv_file, sep='\t')
-        df = self.filter_variants(df, "All")
-        df.sort_values(['#chrom', 'repeatunit', 'left'], inplace=True)
-        df.reset_index(drop=True, inplace=True)
+        df = self.filter_variants(df, "All")   
+        df = df.sort_values(['#chrom', 'repeatunit', 'left'])
+        df = df.reset_index(drop=True)
         df['counts'] = np.ones(df.shape[0])
         df['mean_left'] = df.left
-        collapsed_variants = []
 
-         # print tsv fie if it's empty
+        # remove tsv fie if it's empty
         if df.shape[0] == 0:
-            print(f'{tsv_file} is empty')
+            #print(f'{tsv_file} is empty')
+            os.remove(tsv_file)
             return
+
+        collapsed_variants = []
 
         prev_left = None
         prev_unit = None
@@ -149,8 +133,9 @@ class STRlingExperiment(RepeatsExperiment):
                 else:
                     # return if not a string
                     if not isinstance(unit, str):
-                        print(unit)
+                        #print(unit)
                         return
+                    
                     prev_left = left
                     prev_unit = unit
                     prev_counts = count
@@ -174,7 +159,7 @@ class STRlingExperiment(RepeatsExperiment):
             new_df = pd.DataFrame(collapsed_variants)
             new_df['merged_expansions'] = new_df['counts'] > 1
             new_df['left'] = new_df['mean_left']
-            new_df.drop(columns=['counts', 'mean_left'], inplace=True)
+            new_df = new_df.drop(columns=['counts', 'mean_left'])
 
             # Write the result to an output file
             tsv_file_name = os.path.basename(tsv_file)
@@ -184,43 +169,215 @@ class STRlingExperiment(RepeatsExperiment):
             new_df.to_csv(out_file_path, sep='\t', index=False)
         except:
             print("failed to process tsv file: ", tsv_file)
-            return
-        
-    def seperate_tsvs_by_motif(self, tsvs):
-        """
-        For each tsv, get each unique motif, create a directory for
-        that motif if it doesn't exist, filter the tsv by the motif,
-        and write the filtered tsv to the motif directory.
-        """
-        all_motifs = set()
-        for tsv in tsvs:
-            df = pd.read_csv(tsv, sep='\t')
-            motifs = df.repeatunit.unique()
-            all_motifs.update(motifs)
-            for motif in motifs:
-                motif_dir = os.path.join(self.out_dir, motif)
-                if not os.path.exists(motif_dir):
-                    os.mkdir(motif_dir)
-                motif_tsv = df[df.repeatunit == motif]
-                motif_tsv.to_csv(os.path.join(motif_dir, os.path.basename(tsv)), sep='\t', index=False)
 
-        # write all found motifs to a file
-        motif_df = pd.DataFrame(list(all_motifs), columns=['motif'])
-        motif_df.to_csv(os.path.join(f'{self.caller}_motifs.txt'), sep='\t', index=False)
+            return
+
+    def get_kmer_counts(self, motif, tsv):
+        """
+        get mappable normalized kmer count by getting values of 
+        sum_str_count from -genotype file, dividing by the depth
+        couln from the -genotype file. Also get the unplaced counts
+        from the -unplaced file and divide by the average depth
+        """
+        # get the depth from the -genotype file (is tsv)
+        motif_file = tsv.replace('-genotype.txt', f'-unplaced.txt')
+        motif_df = pd.read_csv(motif_file, sep='\t', header=None)
+        genotype_df = pd.read_csv(tsv, sep='\t')
+        avg_depth = genotype_df['depth'].mean()
+        # get value of second column where first column is motif
+        unplaced_counts = motif_df[motif_df[0] == motif][1].values[0] / avg_depth
+        
+        # get the placed counts from the -genotype file
+        motif_match = genotype_df[genotype_df['repeatunit'] == motif]
+        kmers = genotype_df[motif_match].sum_str_count.values[0] / genotype_df[motif_match].depth.values[0]
+
+        return sum(kmers), unplaced_counts, motif, tsv
+    
+
+    def schedule_get_kmer_counts(self):
+        """
+        Schedule a get_kmer_counts job
+        """
+        if not hasattr(self, 'tsvs'): # if self.tsvs does not exist, get it from the pickled files
+            with open(f"{self.caller}_tsvs.txt", 'rb') as handle:
+                self.tsvs = pkl.load(handle)
+            with open(f"{self.caller}_case_tsvs.txt", 'rb') as handle:
+                self.case_tsvs = pkl.load(handle)
+            with open(f"{self.caller}_cont_tsvs.txt", 'rb') as handle:
+                self.cont_tsvs = pkl.load(handle)
+
+
+        self.motifs = pd.read_csv(os.path.join(f'{self.caller}_motifs.txt'), sep='\t').iloc[:,0].dropna().tolist()
+        pool = multiprocessing.Pool()
+        results = pool.imap_unordered(self.get_kmer_counts, product(self.motifs, self.tsvs))
+
+        case_kmer_counts = {}
+        control_kmer_counts = {}
+
+        unplaced_case_counts = {}
+        unplaced_control_counts = {}
+
+        sum_case_counts = {}
+        sum_control_counts = {}
+
+        for result in results:
+            motif = result[0]
+            tsv = result[1]
+
+            if tsv in self.case_tsvs[motif]:
+                # if motif not in case_kmer_counts, add it
+                if motif not in case_kmer_counts:
+                    case_kmer_counts[motif] = [result[2]]
+                else:
+                    case_kmer_counts[motif].append(result[2])
+                if motif not in unplaced_case_counts:
+                    unplaced_case_counts[motif] = [result[3]]
+                else:
+                    unplaced_case_counts[motif].append(result[3])
+                if motif not in sum_case_counts:
+                    sum_case_counts[motif] = [result[2]+result[3]]
+                else:
+                    sum_case_counts[motif].append(result[2]+result[3])
+
+            elif tsv in self.control_tsvs[motif]:
+                if motif not in control_kmer_counts:
+                    control_kmer_counts[motif] = [result[2]]
+                else:
+                    control_kmer_counts[motif].append(result[2])
+                if motif not in unplaced_control_counts:
+                    unplaced_control_counts[motif] = [result[3]]
+                else:
+                    unplaced_control_counts[motif].append(result[3])
+                if motif not in sum_control_counts:
+                    sum_control_counts[motif] = [result[2]+result[3]]
+                else:
+                    sum_control_counts[motif].append(result[2]+result[3])
+            
+        # perform Wilcoxon rank sum test on case and control kmer counts
+        case_control_pvals = {}
+        for motif in self.motifs:
+            case_kmers = case_kmer_counts[motif]
+            control_kmers = control_kmer_counts[motif]
+            case_control_pvals[motif] = ranksums(case_kmers, control_kmers)[1]
+        
+        # perform Wilcoxon rank sum test on unplacd case and control kmer counts
+        unplaced_case_control_pvals = {}
+        for motif in self.motifs:
+            case_kmers = unplaced_case_counts[motif]
+            control_kmers = unplaced_control_counts[motif]
+            unplaced_case_control_pvals[motif] = ranksums(case_kmers, control_kmers)[1]
+        
+        # perform Wilcoxon rank sum test on sum case and control kmer counts
+        sum_case_control_pvals = {}
+        for motif in self.motifs:
+            case_kmers = sum_case_counts[motif]
+            control_kmers = sum_control_counts[motif]
+            sum_case_control_pvals[motif] = ranksums(case_kmers, control_kmers)[1]
+        
+        # correct p-values
+        case_control_pvals = multipletests(list(case_control_pvals.values()), method='fdr_bh')[1]
+        unplaced_case_control_pvals = multipletests(list(unplaced_case_control_pvals.values()), method='fdr_bh')[1]
+        sum_case_control_pvals = multipletests(list(sum_case_control_pvals.values()), method='fdr_bh')[1]
+
+        # create dataframe of p-values
+        case_control_df = pd.DataFrame(case_control_pvals, index=list(case_control_pvals.keys()), columns=['case_control_pval'])
+        # add the case and control kmer counts to the dataframe
+        case_control_df['case_kmer_counts'] = case_control_df.index.map(case_kmer_counts)
+        case_control_df['control_kmer_counts'] = case_control_df.index.map(control_kmer_counts)
+
+        # write dataframe to file
+        case_control_df.to_csv(f'{self.caller}_case_control_pvals.txt', sep='\t')
+        del case_control_df
+
+        unplaced_case_control_df = pd.DataFrame(unplaced_case_control_pvals, index=list(unplaced_case_control_pvals.keys()), columns=['unplaced_case_control_pval'])
+        # add the unplaced case and control kmer counts to the dataframe
+        unplaced_case_control_df['unplaced_case_kmer_counts'] = unplaced_case_control_df.index.map(unplaced_case_counts)
+        unplaced_case_control_df['unplaced_control_kmer_counts'] = unplaced_case_control_df.index.map(unplaced_control_counts)
+        
+        # write dataframe to file
+        unplaced_case_control_df.to_csv(f'{self.caller}_unplaced_case_control_pvals.txt', sep='\t')
+        del unplaced_case_control_pvals
+
+        sum_case_control_df = pd.DataFrame(sum_case_control_pvals, index=list(sum_case_control_pvals.keys()), columns=['sum_case_control_pval'])
+        # add the sum case and control kmer counts to the dataframe
+        sum_case_control_df['sum_case_kmer_counts'] = sum_case_control_df.index.map(sum_case_counts)
+        sum_case_control_df['sum_control_kmer_counts'] = sum_case_control_df.index.map(sum_control_counts)
+
+        # write dataframe to file
+        sum_case_control_df.to_csv(f'{self.caller}_sum_case_control_pvals.txt', sep='\t')
+        del sum_case_control_df
 
     
-    def collapse_sample_tsvs(self, in_dir, out_dir):
+    def plot_kmer_distributions(self):
         """
-        Parallelize the collapsing of sample TSV files.
+        Plot the kmer distributions for each significant motif
         """
-        print("Collapsing individual STRling TSV files...")
-        for motif in os.listdir(in_dir):
-            motif_dir = os.path.join(in_dir, motif)
-            motif_out_dir = os.path.join(out_dir, motif)
-            if not os.path.exists(motif_out_dir):
-                os.mkdir(motif_out_dir)
-            pool = multiprocessing.Pool()
-            pool.starmap(self.process_tsv_file, [(os.path.join(motif_dir, file), motif_out_dir) for file in os.listdir(motif_dir) if file.endswith('-genotype.txt')])
-            pool.close()
-            pool.join()
-            self.filter_tsv_files()
+        titles = [
+            'Case vs Control Kmer Counts (placed)',
+            'Case vs Control Kmer Counts (unplaced)',
+            'Case vs Control Kmer Counts (sum)'
+        ]
+
+
+        def make_plot(title):
+            for i, row in case_control_df.iterrows():
+                motif = row.name
+                case_values = row['case_kmer_counts']
+                control_values = row['control_kmer_counts']
+                # plot the distributions
+                max_value = max(max(case_values), max(control_values))
+                min_value = min(min(case_values), min(control_values))
+                bins = np.linspace(min_value, max_value, num=20)
+                
+                # Calculate normalized heights by dividing counts by the total number of samples
+                case_counts, case_bins = np.histogram(case_values, bins=bins)
+                control_counts, control_bins = np.histogram(control_values, bins=bins)
+                total_case_samples = len(case_values)
+                total_control_samples = len(control_values)
+                case_heights = case_counts / total_case_samples
+                control_heights = control_counts / total_control_samples
+                ##########################
+
+                # plot the distributions
+                fig, ax = plt.subplots()
+
+                ax.bar(bins[:-1], case_heights, width=np.diff(bins), alpha=0.6, label='Case Kmers')
+                ax.bar(bins[:-1], control_heights, width=np.diff(bins), alpha=0.6, label='Control Kmers')
+
+                # title
+                ax.set_title(title)
+
+                # show
+                plt.show()
+            
+
+        # read in the p-values
+        case_control_df = pd.read_csv(f'{self.caller}_case_control_pvals.txt', sep='\t', index_col=0)
+
+        # plot the distributions for each significant motif
+        case_control_df = case_control_df[case_control_df['case_control_pval'] < 0.05]
+        # sort by p-value
+        case_control_df = case_control_df.sort_values(by=['case_control_pval'], ascending=True)
+        
+        # plot the distributions
+        make_plot(titles[0])
+
+        # next plot
+        unplaced_case_control_df = pd.read_csv(f'{self.caller}_unplaced_case_control_pvals.txt', sep='\t', index_col=0)
+        unplaced_case_control_df = unplaced_case_control_df[unplaced_case_control_df['unplaced_case_control_pval'] < 0.05]
+        unplaced_case_control_df = unplaced_case_control_df.sort_values(by=['unplaced_case_control_pval'], ascending=True)
+        make_plot(titles[1])
+
+        # next plot
+        sum_case_control_df = pd.read_csv(f'{self.caller}_sum_case_control_pvals.txt', sep='\t', index_col=0)
+        sum_case_control_df = sum_case_control_df[sum_case_control_df['sum_case_control_pval'] < 0.05]
+        sum_case_control_df = sum_case_control_df.sort_values(by=['sum_case_control_pval'], ascending=True)
+        make_plot(titles[2])
+
+
+
+
+
+            
+
+

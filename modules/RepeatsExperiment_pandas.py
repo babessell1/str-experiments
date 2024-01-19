@@ -1,46 +1,36 @@
 import pandas as pd
 import numpy as np
 from itertools import zip_longest, product
+import sys
 import os
 from scipy.stats import ranksums, ks_2samp, anderson_ksamp
 from statsmodels.stats.multitest import multipletests
+import multiprocessing
 import warnings
-import dask.dataframe as dd
-from dask.distributed import Client, progress, performance_report
-from dask import delayed
-from dask_jobqueue import SLURMCluster
-import dask.bag as db
-import dask.array as da
 import pickle as pkl
-
 
 # Filter out the "p-value capped" warning
 warnings.filterwarnings("ignore", category=UserWarning, message="p-value capped: true value larger than 0.25")
-# filter  UserWarning: Sending large graph of size 22.63 MiB. This may cause some slowdown. Consider scattering data ahead of time and using futures. warnings.warn(
-
-warnings.filterwarnings("ignore", category=UserWarning, message="Sending large graph of size")
-
 
 class RepeatsExperiment:
-    def __init__(self,
-        tsv_dir, csv_metadata, 
-        chroms="All", sex=None, tissue=None, dataset=None, cohort=None, race=None, ethnicity=None, apoe=None, 
-        slop=100, slop_modifier=1.5, test="KS", motifs_to_drop=[], count_cutoff=10, assume_zero=True, 
-        cores_per_node=36, mem_per_node="128GB", partition="", account="", nodes=1, walltime="4:00:00", dask_log_directory="dask_logs",
-        corrupt_file_log=None
+    def __init__(self, tsv_dir, csv_metadata, chroms="All", sex=None, tissue=None,
+                 dataset=None, cohort=None, race=None, ethnicity=None, apoe=None, 
+                 slop=100, slop_modifier=1.5, test="KS", motifs_to_drop=[], count_cutoff=10,
+                 assume_zero=True, repeat_nomenclature="", cores_per_node=36, mem_per_node="128GB",
+                 partition="", account="", nodes=1, walltime="4:00:00", dask_log_directory="dask_logs",
+                 corrupt_file_log=None
     ):
-        
-        # data inputs
+        self.test_variable = None
         self.tsv_dir = tsv_dir
         self.csv_metadata = csv_metadata
-
-        # analysis parameters
         self.slop = slop
         self.slop_modifier = slop_modifier
         self.test = test
+        self.caller = "None"
         self.motifs_to_drop = motifs_to_drop
         self.count_cutoff = count_cutoff
         self.assume_zero = assume_zero
+        self.repeat_nomenclature = repeat_nomenclature
 
         # cluster parameters
         self.cores_per_node = cores_per_node
@@ -51,14 +41,6 @@ class RepeatsExperiment:
         self.walltime = walltime
         self.dask_log_directory = dask_log_directory
 
-        # from subclasses
-        self.repeat_nomenclature = ""
-        self.test_variable = None
-        self.caller = "None"
-        self.locus_file_extension = ""
-        self.cols_to_drop = []
-
-        # cohort parameters
         if cohort is None or cohort == "all_cohorts":
             cohort = "all_cohorts"
             self.cohort = cohort
@@ -109,16 +91,6 @@ class RepeatsExperiment:
             "Ethnicity": ethnicity,
             "APOE": apoe,
         }
-
-        # logging
-        if corrupt_file_log is None:
-            self.corrupt_file_log = "corrupt_files.log"
-        else:
-            self.corrupt_file_log = corrupt_file_log
-
-        # empty the log files
-        open(self.corrupt_file_log, 'w').close()
-
 
     @staticmethod
     def get_metadata_from_filename(filename):
@@ -191,24 +163,6 @@ class RepeatsExperiment:
 
         # string 2 not found as substring
         return False
-    
-
-    def start_slurm_cluster(self):
-        """
-        Start a SLURM cluster using the parameters specified in the constructor
-        """
-        return SLURMCluster(
-            cores=self.cores_per_node,
-            memory=self.mem_per_node,
-            queue=self.partition,
-            account=self.account,
-            log_directory="/home/bbessell/str-analysis/dask_logs",
-            walltime="24:00:00",
-            interface="ib0",
-            processes=self.cores_per_node,
-            #job_extra_directives=[f'--nodes={self.nodes}'],
-            death_timeout=100*24*60,  # 100 days
-        )
     
 
     def get_metadata_from_subject(self, subject):
@@ -345,7 +299,7 @@ class RepeatsExperiment:
         return "/".join(tsv_split)
 
 
-    def summarize_chrom_motif(self, chrom_motif):
+    def summarize(self, chrom_motif):
         """
         Aggregate summary statisitcs for each variant in a chromosome and motif
         """
@@ -416,7 +370,13 @@ class RepeatsExperiment:
             iteration += 1
 
             progress = iteration / len(self.tsvs) * 100
- 
+            # write progress to logs
+            #log_file.write(f"#### {chrom} Progress: {progress:.2f}% [{iteration}/{len(self.tsvs) }] ##\n")
+
+            # print progress every 20th iteration
+            #if iteration % 20 == 0:
+                #print(f"## {chrom} Progress: {progress:.2f}% [{iteration}/{len(self.tsvs) }] ##", end='\r')
+
         # remove last row if last row is empty or nan
         if dff.iloc[-1].isnull().all() or dff.iloc[-1].isna().all():
             dff = dff.iloc[:-1]
@@ -450,8 +410,6 @@ class RepeatsExperiment:
             with open(f"{self.caller}_cont_tsvs.txt", 'rb') as handle:
                 self.cont_tsvs = pkl.load(handle)
 
-
-
         self.motifs = pd.read_csv(os.path.join(f'{self.caller}_motifs.txt'), sep='\t').iloc[:,0].dropna().tolist()
         chromosomes = self.chroms
 
@@ -461,40 +419,36 @@ class RepeatsExperiment:
             if not os.path.exists(dir_path):
                 os.makedirs(dir_path)
 
-        # Create a SLURMCluster
-        print("Waiting for workers...")
-        cluster = self.start_slurm_cluster()
-        cluster.scale(self.nodes)
-        client = Client(cluster)
-        #client.wait_for_workers(self.nodes)
+        # Create a multiprocessing Pool
+        pool = multiprocessing.Pool()
 
         # Parallelize the summarize function for each chromosome and motif combination
         #results = pool.imap_unordered(self.summarize, [(chrom, motif) for chrom, motif in product(chromosomes, motifs)])
-        #results = pool.imap_unordered(self.summarize, product(chromosomes, self.motifs))
+        results = pool.imap_unordered(self.summarize, product(chromosomes, self.motifs))
 
-        tasks = [delayed(self.summarize_chrom_motif)(chrom_motif) for chrom_motif in product(chromosomes, self.motifs)]
+        # Iterate over results to start the computation
+        for _ in results:
+            pass
 
-        futures = client.compute(tasks)
-        progress(futures, notebook=False)
+        # Close the pool and wait for all processes to finish
+        pool.close()
+        pool.join()
 
-        with performance_report(filename=f"{self.dask_log_directory}/summarize_perf.html"):
-            client.gather(futures)
+        return None
 
-        print("\nClosing cluster...")
-        client.close()
-        cluster.close()
-
-        return
-
-    def perform_stat_test(self, iter):
+    def par_process_variant(self, iter):
         """
         Match each variant in a summary df to all corresponding variants in each subject df to extract case and control allele2 estimate sizes for each variant (defined by a row in the summary df). This can be done in parallel
         """
         i = iter[0]
         variant_row = iter[1]
+        
+        if variant_row['counts'] < self.count_cutoff:
+            return None
+
         variant = variant_row['repeatunit']
         mean_left = variant_row['mean_left']
-        std_left = da.sqrt(variant_row['variance_left'])
+        std_left = np.sqrt(variant_row['variance_left'])
         range_ = self.slop * self.slop_modifier
         chrom = variant_row['#chrom']
         motif = variant_row['repeatunit']
@@ -511,14 +465,14 @@ class RepeatsExperiment:
         tsvs_to_check = os.listdir(os.path.join(self.tsv_dir, motif))
 
         for tsv_file in tsvs_to_check:
-            tsv_df = dd.read_csv(os.path.join(self.tsv_dir, motif, tsv_file), sep='\t')
+            tsv_df = pd.read_csv(os.path.join(self.tsv_dir, motif, tsv_file), sep='\t')
             # subset to only the variants that match the current variant and same chromosome
             variant_df = tsv_df[(tsv_df['repeatunit'] == variant ) & (tsv_df['#chrom'] == chrom)]
 
             add_variants = variant_df[
                 (variant_df['left'] >= mean_left - range_ ) &
                 (variant_df['left'] <= mean_left + range_ )
-            ][self.test_variable].compute().tolist()
+            ][self.test_variable].tolist()
 
             #if variant == "AT" and chrom == "chr1" and abs(mean_left - 52797421) < range_:
             if len(add_variants) > 1:
@@ -532,17 +486,17 @@ class RepeatsExperiment:
                 add_variants_sorted = sorted_variant_df[
                     (sorted_variant_df['left'] >= mean_left - range_ ) &
                     (sorted_variant_df['left'] <= mean_left + range_ )
-                ][self.test_variable].compute().tolist()
-                #for row in add_variants_sorted:
-                #    #print(row)
-                #    pass
+                ][self.test_variable].tolist()
+                for row in add_variants_sorted:
+                    #print(row)
+                    pass
             
             if len(add_variants) > 1:
                 #print("WARNING: MORE THAN ONE MATCHING VARIANT FOUND IN SINGLE SUBJECT")
                 warn_flag = True
                 cnt_multi+=1
                 if add_similar:
-                    add_variants = da.sum(add_variants)
+                    add_variants = np.sum(add_variants)
                     matching_variants.append(add_variants)
                 else:
                     continue
@@ -554,13 +508,24 @@ class RepeatsExperiment:
                 matching_variants.append(0) # assume zero (same as ref) if no matching variants
                 matching_filenames.append(os.path.join(self.tsv_dir, motif, tsv_file))
 
+
+        #print("case tsvs: ", self.case_tsvs[motif][:10])
+        #print("cont tsvs: ", self.cont_tsvs[motif][:10])
+
+        #print("matching_filenames: ", matching_filenames[:10])
+
         case_vals = [matching_variants[idx] for idx, file in enumerate(matching_filenames) if file in self.case_tsvs[motif]]
         cont_vals = [matching_variants[idx] for idx, file in enumerate(matching_filenames) if file in self.cont_tsvs[motif]]
 
-        total_found = len([val for val in case_vals if da.abs(val)>0] + [val for val in cont_vals if da.abs(val>0)])
+        total_found = len([val for val in case_vals if np.abs(val)>0] + [val for val in cont_vals if np.abs(val>0)])
+
+        #print(f"Found {total_found} expansions for {variant} in {chrom} in {self.cohort} cohort")
+
+        #print(f"Case vals: {case_vals}")
+        #print(f"Cont vals: {cont_vals}")
 
         # dont bother testing if the amount of expansions is low
-        if sum(val > 0 for val in case_vals) + sum(val > 0 for val in cont_vals) < 10:
+        if sum(val > 0 for val in case_vals) + sum(val > 0 for val in cont_vals) < self.count_cutoff:
             return None
 
         if self.test == "KS":
@@ -593,23 +558,14 @@ class RepeatsExperiment:
             'multi_expansions': cnt_multi
         }
     
-
-    def schedule_perform_stat_test(self):
+    def schedule_perform_stat_test(self, sum_file=None):
         """
         Handle the multiprocessing of the statistical test (par_process_variant) for each chromosome and motif combination
         """
-
+        
         # if self.motifs does not exist, create it from the motifs.txt file
         if not hasattr(self, 'motifs'):
             self.motifs = pd.read_csv(os.path.join(f'{self.caller}_motifs.txt'), sep='\t').iloc[:,0].dropna().tolist()
-
-        if not hasattr(self, 'tsvs'): # if self.tsvs does not exist, get it from the pickled files
-            with open(f"{self.caller}_tsvs.txt", 'rb') as handle:
-                self.tsvs = pkl.load(handle)
-            with open(f"{self.caller}_case_tsvs.txt", 'rb') as handle:
-                self.case_tsvs = pkl.load(handle)
-            with open(f"{self.caller}_cont_tsvs.txt", 'rb') as handle:
-                self.cont_tsvs = pkl.load(handle)
 
         # get all combinations of motifs and chromosomes
         files_to_process = [
@@ -622,42 +578,64 @@ class RepeatsExperiment:
         # remove files that don't exist from the list
         files_to_process = [file for file in files_to_process if os.path.exists(file)]
 
+        if sum_file is None:
+
+            # create a dataframe from first file
+            sum_df = pd.read_csv(files_to_process[0])
+            # drop rows with counts less than cutoff
+            sum_df = sum_df[sum_df['counts'] >= self.count_cutoff]
+            
+            # and then append the rest of the files
+            for file in files_to_process[1:]:
+                next_df = pd.read_csv(file)
+                next_df = next_df[next_df['counts'] >= self.count_cutoff]
+                sum_df = pd.concat([sum_df, next_df], ignore_index=True)
+
+            # write the combined dataframe to a csv
+            sum_df.to_csv(os.path.join(
+                "results", f"full_summary_{self.caller}_{self.cohort}_{self.apoe}.csv"
+            ), index=False)
+
+        else:
+            # read the file into df
+            sum_df = pd.read_csv(sum_file)
+
         significant_variants = []
 
-        # Create a SLURMCluster
-        print("Waiting for workers...")
-        cluster = self.start_slurm_cluster()
-        cluster.scale(self.nodes)
-        client = Client(cluster)
-        #client.wait_for_workers(self.nodes)
+        rows2process = sum_df.shape[0]
 
-        number_files = len(files_to_process)
-
-        for file in files_to_process:
-
-            # make a progress bar
-            print(f"\nProcessing file {files_to_process.index(file)+1}/{number_files}", end='\r')
+        pool = multiprocessing.Pool()  # Create a multiprocessing Pool
         
-            summary_df = dd.read_csv(file)
-            
-            tasks = [delayed(self.perform_stat_test)(iter) for iter in summary_df.iterrows()]
+        cnt = 0
+        for result in pool.imap_unordered(self.par_process_variant, [(i, row) for (i, row) in sum_df.iterrows()]):
+        # The rest of the code remains the same
+            cnt += 1
+            print(f"Progress: {cnt}/{rows2process}", end='\r')
+            if result is not None:
+                significant_variants.append({
+                    'chrom': result['chrom'],
+                    'mean_left': result['mean_left'],
+                    'std_dev': result['std_dev'],
+                    'variant': result['variant'],
+                    #'effect': effect, 
+                    'statistic': result['statistic'],
+                    'p_value': result['p_value'],
+                    'case_values': result['case_vals'],
+                    'control_values': result['cont_vals'],
+                    'recovered_variants': result['recovered_variants'],
+                    'actual_variants': result['actual_variants'],
+                    'warning':  result['warning'],
+                    'multi_expansions': result['multi_expansions']
+                })
 
-            futures = client.compute(tasks)
-            #progress(futures, notebook=False)
-
-            with performance_report(filename=f"{self.dask_log_directory}/perform_stat_test_perf.html"):
-                results = client.gather(futures)
-            
-            for result in results:
-                if result is not None:
-                    significant_variants.append(result)
-            
-        print("\nClosing cluster...")
-        client.close()
-        cluster.close()
+        pool.close()  # Close the multiprocessing Pool
+        pool.join()   # Wait for all processes to finish
 
         # Perform multiple testing correction
         p_values = [variant['p_value'] for variant in significant_variants]
+
+        print("P values before correction:")
+        print(p_values)
 
         reject, p_corrected, _, _ = multipletests(p_values, method='fdr_bh')
 
@@ -665,31 +643,32 @@ class RepeatsExperiment:
             variant['p_corrected'] = p_corrected[i]
             variant['reject_null'] = reject[i]
 
+        # convert list of chromosomes to string
         if len(self.chroms) == 1:
             chroms = self.chroms[0]
         else:
             chroms = "_".join(self.chroms)
 
         self.WT_df = pd.DataFrame(significant_variants)
-        self.WT_df.sort_values('p_corrected', ascending=True)
+        self.WT_df.sort_values('p_corrected', inplace=True, ascending=True)
         self.WT_df.to_csv(f"results/{self.caller}_{self.test}_{chroms}_{self.cohort}_{self.apoe}.csv", index=False)
 
         return
     
-
-    def filter_tsvs(self, motif):
+    def filter(self, motif):
         """
-        Get motif seperated case/control TSV file lists from the directory and filter files
-        that adhere to desired covariates described by metadict
+        Get case/control TSV file lists from the directory and filter files that adhere to desired covariates described by metadict
         """
         tsvs = []
         case_tsvs = []
         cont_tsvs = []
  
-        cohort_subjects = dd.read_csv(self.csv_metadata).Subject.compute().tolist()
+        cohort_subjects = pd.read_csv(self.csv_metadata).Subject.tolist()
 
         if type(motif) is not str:  # handle nans (may want to write csv to log file so we can rerun these samples)
             return tsvs, case_tsvs, cont_tsvs
+        #if not os.path.exists(os.path.join(self.tsv_dir, motif)): # 
+        #    continue
 
         for file in os.listdir(os.path.join(self.tsv_dir, motif)):
             if file.endswith(self.locus_file_extension):
@@ -701,7 +680,7 @@ class RepeatsExperiment:
                         if val == "all_apoe": val = None
                         if val == "all_cohorts": val = None
                         if val and val != subject_metadata[key]:
-                            #print(val, subject_metadata[key])
+                            print(val, subject_metadata[key])
                             add_flag = False
                             continue
                     if add_flag:
@@ -717,7 +696,7 @@ class RepeatsExperiment:
     
     def schedule_filter_tsv_files(self):
         """
-        Schedule filtering of TSV files for each motif in parallel using multiprocessing
+        Filter TSV files for each motif in parallel using multiprocessing
         """
         print("Filtering TSV files...")
 
@@ -726,87 +705,60 @@ class RepeatsExperiment:
         self.case_tsvs = {}
         self.cont_tsvs = {}
 
-        # Create a SLURMCluster
-        print("Waiting for workers...")
-        cluster = self.start_slurm_cluster()
-        cluster.scale(self.nodes)
-        client = Client(cluster)
-        #client.wait_for_workers(self.nodes)
+        # Create a multiprocessing Pool
+        pool = multiprocessing.Pool()
 
-        # create dask bag of motifs
-        motifs_bag = db.from_sequence(self.motifs)
+        # Parallelize the summarize function for each motif
+        results = pool.imap_unordered(self.filter, self.motifs)
 
-        # map filter function to each motif
-        futures = motifs_bag.map(self.filter_tsvs).persist()
-
-        # Print progress to the user
-        progress(futures, notebook=False)
-
-        # Generate performance report
-        with performance_report(filename=f"{self.dask_log_directory}/filter_tsvs_perf.html"):
-            results = client.compute(futures, sync=True)
-
-        # TODO: find a more memory efficient way to do this
         # store results in class variables for summarizing function
-
         for result in results:
             self.tsvs[result[0]] = result[1]
             self.case_tsvs[result[0]] = result[2]
             self.cont_tsvs[result[0]] = result[3]
+        
+        pool.close()
+        pool.join()
 
         # write self.tsvs, self.case_tsvs, and self.cont_tsvs dictionaries to pickles
-        with open(f"{self.caller}_tsvs.txt", 'wb') as handle:
+        with open(f"{self.caller}_{self.apoe}_tsvs.txt", 'wb') as handle:
             pkl.dump(self.tsvs, handle)
-        with open(f"{self.caller}_case_tsvs.txt", 'wb') as handle:
+        with open(f"{self.caller}_{self.apoe}_case_tsvs_{self.apoe}.txt", 'wb') as handle:
             pkl.dump(self.case_tsvs, handle)
-        with open(f"{self.caller}_cont_tsvs.txt", 'wb') as handle:
+        with open(f"{self.caller}_{self.apoe}_cont_tsvs.txt", 'wb') as handle:
             pkl.dump(self.cont_tsvs, handle)
-
-        # close cluster
-        print("\nClosing cluster...")
-        client.close()
-        cluster.close()
-
+    
 
     def seperate_tsv_by_motif(self, tsv):
-        """
-        Seperate a TSV file by motif, writing each motif to a seperate file
-        """
-
-        df = dd.read_csv(tsv, sep='\t', assume_missing=True)
-
-        # return empty list if df has missing values
-        # remember to use compute() because lazy evaluation
-        #if df.isnull().any().any().compute():
-        #    return []
-
-        motifs = df[self.repeat_nomenclature].unique().compute()
-
+        df = pd.read_csv(tsv, sep='\t')
+        motifs = df[self.repeat_nomenclature].unique()
+        motifs_to_remove = []
         for motif in motifs:
+            if len(motif) > 9:
+                motifs_to_remove.append(motif)
+                continue
             try:
                 motif_dir = os.path.join(self.seperated_dir, motif)
             except:
                 warnings.warn(f"Motif {motif} is not a valid directory name. Corrupted file: {tsv}")
-                with open(self.corrupt_file_log, 'a') as handle:
-                    handle.write(f"{tsv}\n")
                 continue
 
             if not os.path.exists(motif_dir):
                 os.makedirs(motif_dir, exist_ok=True)
 
             motif_tsv = df[df[self.repeat_nomenclature] == motif]
-            #print(f"Writing {os.path.join(motif_dir, os.path.basename(tsv))}")
-            motif_tsv.to_csv(os.path.join(motif_dir, os.path.basename(tsv)), sep='\t', index=False, single_file=True)
+            motif_tsv.to_csv(os.path.join(motif_dir, os.path.basename(tsv)), sep='\t', index=False)
+        
+        motifs = set(motifs) - set(motifs_to_remove)
 
-        return motifs
+        return list(motifs)
 
 
     def schedule_seperate_tsvs_by_motif(self, in_dir, seperated_dir):
         """
-        Create a run SLURM client t paralleize for each tsv, 
-        getting each unique motif, creating a directory for
-        that motif if it doesn't exist, filtering the tsv by the motif,
-        and writing the filtered tsv to the motif directory.
+        For each tsv, get each unique motif, create a directory for
+        that motif if it doesn't exist, filter the tsv by the motif,
+        and write the filtered tsv to the motif directory.
         """
         print("Seperating TSVs by motif...")
 
@@ -817,34 +769,19 @@ class RepeatsExperiment:
 
         all_motifs = set()
         tsvs = [os.path.join(in_dir, file) for file in os.listdir(in_dir) if file.endswith(self.locus_file_extension)]
-
-        print("Waiting for workers...")
-        cluster = self.start_slurm_cluster()
-        cluster.scale(self.nodes)
-        client = Client(cluster)
-        #client.wait_for_workers(self.nodes)
-
-        futures = client.map(self.seperate_tsv_by_motif, tsvs)
-
-        # Print progress to the user
-        progress(futures, notebook=False)
-
-        # Generate performance report
-        with performance_report(filename=f"{self.dask_log_directory}/seperate_tsvs_perf.html"):
-            results = client.gather(futures)
-
-        print("\nClosing cluster...")
-        client.close()
-        cluster.close()
-
-        for motifs in results:
+        pool = multiprocessing.Pool()
+        # run seperate_tsvs_by_motif for each tsv in parallel and return the set of all motifs
+        for motifs in pool.imap_unordered(self.seperate_tsv_by_motif, tsvs):
             all_motifs.update(motifs)
+
+        pool.close()
+        pool.join()
 
         # write all found motifs to a file
         motif_df = pd.DataFrame(list(all_motifs), columns=['motif'])
         motif_df.to_csv(os.path.join(f'{self.caller}_motifs.txt'), sep='\t', index=False, header=False)
 
-
+    
     def schedule_collapse_tsvs(self, seperated_dir, out_dir):
         """
         Parallelize the collapsing of sample TSV files.
@@ -854,13 +791,7 @@ class RepeatsExperiment:
         if not os.path.exists(out_dir):
             os.makedirs(out_dir, exist_ok=True)
 
-        print("Waiting for workers...")
-        cluster = self.start_slurm_cluster()
-        cluster.scale(self.nodes)
-        client = Client(cluster)
-        #client.wait_for_workers(self.nodes)
-
-        tasks = []
+        pool = multiprocessing.Pool()  # Create a single pool here
 
         for motif in os.listdir(seperated_dir):
             motif_dir = os.path.join(seperated_dir, motif)
@@ -868,66 +799,9 @@ class RepeatsExperiment:
 
             if not os.path.exists(motif_out_dir):
                 os.makedirs(motif_out_dir, exist_ok=True)
-            
-            for file in os.listdir(motif_dir):
-                if file.endswith(self.locus_file_extension):
-                    tasks.append(delayed(self.collapse_tsv_file)(
-                        os.path.join(motif_dir, file),
-                        motif_out_dir
-                    ))
 
-        futures = client.compute(tasks)
-        progress(futures, notebook=False) # print progress
-        
-        with performance_report(filename=f"{self.dask_log_directory}/collapse_perf.html"):
-            client.gather(futures)
+            pool.starmap(self.collapse_tsv_file, [(os.path.join(motif_dir, file), motif_out_dir) for file in os.listdir(motif_dir) if file.endswith(self.locus_file_extension)])
 
-        print("\nClosing cluster...")
-        client.close()
-        cluster.close()
-
-
-def efficient_summarize(self, in_dir):
-    """
-    instead of seperating by motif and then summarizing with
-    an online algorithm, merge tsv files with merge_asof for tolerance
-    to generate the summary file
-    """
-    print("Creating Summary file...")
-
-    tsvs = [os.path.join(in_dir, file) for file in os.listdir(in_dir) if file.endswith(self.locus_file_extension)]
-
-    # merge all tsvs into one dataframe based on chromosome, repeat unit,
-    # and left coordinate with a tolerance of slop
-    df = pd.read_csv(tsvs[0], sep='\t')
-    # keys must be sorted for merge_asof
-    df.sort_values(['#chrom', 'repeatunit', 'left'], inplace=True)
-    for tsv in tsvs[1:]:
-        next_df = pd.read_csv(tsv, sep='\t')
-        next_df.sort_values(['#chrom', 'repeatunit', 'left'], inplace=True)
-        # need two operations to get full join (asof only works in one direction)
-        df1 = pd.merge_asof(df, next_df, on='left', by=['#chrom', 'repeatunit'], tolerance=self.slop, direction='nearest')
-        df2 = pd.merge_asof(next_df, df, on='left', by=['#chrom', 'repeatunit'], tolerance=self.slop, direction='nearest')
-        df = pd.concat([df1, df2])
-        df1.columns, df2.columns = df2.columns, df1.columns
-
-        df.head()
-        stop
-
-        # in cases where there is a left coordinate match, but the repeat units are different,
-        # take the mean of the left
-        df['left'] = df[['left_x', 'left_y']].mean(axis=1)
-        df.drop(columns=['left_x', 'left_y'], inplace=True)
-
-
-
-
-        # in cases where the left coordinates are different, take the mean
-        # of the two left coordina
-    
-
-
-
-
-
+        pool.close()  # Close and join the pool after all tasks are submitted
+        pool.join()
 

@@ -61,9 +61,11 @@ def create_1_plots(WT_df1, slop=5000*10, apoe="All APOE", cohort="All Cohorts"):
     #filtered_df = WT_df1[WT_df1['variant'] == "ACGGGGAGAGGGAGAGGGAG"]
     #print(filtered_df)
     # filter out AT repeats
-    WT_df1 = WT_df1[WT_df1['variant'] != "AT"]
-    WT_df1 = WT_df1[WT_df1['p_value'] < .3]
-    WT_df1 = WT_df1.sort_values(by=['actual_variants'], ascending=False)
+    WT_df1 = WT_df1[WT_df1['p_value'] < .05]
+    #WT_df1 = WT_df1.sort_values(by=['actual_variants'], ascending=False)
+    # drop dinucleotide repeats
+    WT_df1 = WT_df1[WT_df1['variant'].str.len() > 2]
+
 
     for i, row in WT_df1.iterrows():
         print(row)
@@ -116,7 +118,7 @@ def create_1_plots(WT_df1, slop=5000*10, apoe="All APOE", cohort="All Cohorts"):
         axes.set_ylabel('Frequency')
         axes.legend()
 
-        axes.set_title(f"Cohort: {cohort}, APOE: {apoe}\nRepeat Unit: {row['variant']} on {row['chrom']} ({row['statistic']} statistic)")
+        axes.set_title(f"Cohort: {cohort}, APOE: {apoe}\nRepeat Unit: {row['variant']} on {row['chrom']} at {row['mean_left']} ({row['statistic']} statistic)")
 
         # Show the plot
         plt.tight_layout()
