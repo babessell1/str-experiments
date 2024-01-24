@@ -172,13 +172,15 @@ class STRlingExperiment(RepeatsExperiment):
 
             return
 
-    def get_kmer_counts(self, motif, tsv):
+    def get_kmer_counts(self, iter):
         """
         get mappable normalized kmer count by getting values of 
         sum_str_count from -genotype file, dividing by the depth
         couln from the -genotype file. Also get the unplaced counts
         from the -unplaced file and divide by the average depth
         """
+        motif = iter[0]
+        tsv = iter[1]
         # get the depth from the -genotype file (is tsv)
         motif_file = tsv.replace('-genotype.txt', f'-unplaced.txt')
         motif_df = pd.read_csv(motif_file, sep='\t', header=None)
@@ -373,10 +375,6 @@ class STRlingExperiment(RepeatsExperiment):
         sum_case_control_df = sum_case_control_df[sum_case_control_df['sum_case_control_pval'] < 0.05]
         sum_case_control_df = sum_case_control_df.sort_values(by=['sum_case_control_pval'], ascending=True)
         make_plot(titles[2])
-
-
-
-
 
             
 
