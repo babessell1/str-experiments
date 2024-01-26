@@ -1,0 +1,94 @@
+---
+title: "AD STR GO Term Analysis"
+output: html_document
+---
+
+```{r}
+library(ggplot2)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ggplot2)
+library(enrichplot)
+library(dplyr)
+
+```
+
+
+```{r}
+setwd("C:/Users/bbessell/OneDrive - Michigan Medicine/Documents/Research/STR")
+str_data <- read.csv(file="overlaps/WT_34_all_cohorts.csv")
+```
+
+```{r}
+
+# Extract genes with significant p-value
+selected_genes <- str_data$Gene[str_data$p_corrected < 0.05]
+selected_genes <- str_data$Gene[str_data$statistic < 0]
+
+# Convert gene symbols to Entrez IDs
+gene_ids1 <- bitr(selected_genes, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+gene_ids2 <- bitr(selected_genes, fromType = "ENSEMBL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+colnames(gene_ids2) <- colnames(gene_ids1)
+gene_ids <- bind_rows(gene_ids1, gene_ids2)
+gene_ids <- gene_ids %>%
+  filter(!duplicated(.[2]))
+
+# Run enricher function for Gene Ontology (GO) Analysis
+enrich_results <- enrichGO(
+  gene = gene_ids$ENTREZID, 
+  OrgDb = org.Hs.eg.db, 
+  keyType = "ENTREZID",
+  ont = "BP",
+  pAdjustMethod = "BH", 
+  pvalueCutoff = 0.05, 
+  qvalueCutoff = 0.1
+)
+
+# Convert the enriched results to a data frame
+go_results <- as.data.frame(enrich_results)
+
+#go_results <- go_results[go_results$Ontology=='BP',]
+
+# Concatenate the gene symbols associated with each GO term into a single string
+go_results$gene <- sapply(strsplit(go_results$geneID, "/"), function(x) {
+  gene_symbols <- gene_ids$SYMBOL[match(x, gene_ids$ENTREZID)]
+  return(paste(sort(gene_symbols), collapse=","))
+})
+
+
+
+options(repr.plot.width = 15, repr.plot.height = 20)
+
+# print a dotplot of the enrichment results
+dotplot(enrich_results, showCategory=20) + 
+  theme(plot.title = element_text(hjust = 0.5), legend.position="right") +
+  theme(axis.text.x = element_text(angle = 90))
+
+ggsave(filename = "go_dot_plot.png", width = 10, height = 12, dpi = 300)
+
+
+######################################
+
+# get significant gene ontology terms
+sig_terms <- go_results[go_results$qvalue < 0.05, ] 
+sig_terms_df <- as.data.frame(sig_terms)
+
+# Concatenate the gene symbols associated with each GO term into a single string
+sig_terms_df$gene <- sapply(strsplit(sig_terms_df$geneID, "/"), function(x) {
+  gene_symbols <- selected_genes[match(x, gene_ids$UNIPROT)]
+  return(paste(sort(gene_symbols), collapse=", "))
+})
+
+# print selected data
+print(sig_terms_df)
+
+# Generate barplot to visualize the results
+ggplot(sig_terms_df, aes(x = reorder(Description, pvalue), y = -log10(pvalue), fill = -log10(pvalue))) +
+  geom_col() +
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Enriched GO Terms", y = "-log10(Adjusted P value)", title = "GO Enrichment Analysis") +
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1))
+
+ggsave(filename = "go_bar_plot.png", width = 10, height = 16, dpi = 300)
+```

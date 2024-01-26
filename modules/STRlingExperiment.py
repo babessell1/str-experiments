@@ -181,6 +181,10 @@ class STRlingExperiment(RepeatsExperiment):
         """
         motif = iter[0]
         tsv = iter[1]
+
+        print("motif: ", motif)
+        print("tsv: ", tsv)
+
         # get the depth from the -genotype file (is tsv)
         motif_file = tsv.replace('-genotype.txt', f'-unplaced.txt')
         motif_df = pd.read_csv(motif_file, sep='\t', header=None)
@@ -207,6 +211,8 @@ class STRlingExperiment(RepeatsExperiment):
                 self.case_tsvs = pkl.load(handle)
             with open(f"{self.caller}_cont_tsvs.txt", 'rb') as handle:
                 self.cont_tsvs = pkl.load(handle)
+
+        print(product(self.motifs, self.tsvs))
 
 
         self.motifs = pd.read_csv(os.path.join(f'{self.caller}_motifs.txt'), sep='\t').iloc[:,0].dropna().tolist()
@@ -319,7 +325,6 @@ class STRlingExperiment(RepeatsExperiment):
             'Case vs Control Kmer Counts (unplaced)',
             'Case vs Control Kmer Counts (sum)'
         ]
-
 
         def make_plot(title):
             for i, row in case_control_df.iterrows():
