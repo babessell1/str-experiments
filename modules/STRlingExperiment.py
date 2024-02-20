@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import multiprocessing
 from itertools import product
 import pickle as pkl
-from modules.RepeatsExperiment import RepeatsExperiment
+from modules.RepeatsExperiment_pandas import RepeatsExperiment
 
 class STRlingExperiment(RepeatsExperiment):
     def __init__(self, tsv_dir, csv_metadata, **kwargs):
@@ -212,11 +212,14 @@ class STRlingExperiment(RepeatsExperiment):
             with open(f"{self.caller}_cont_tsvs.txt", 'rb') as handle:
                 self.cont_tsvs = pkl.load(handle)
 
-        print(product(self.motifs, self.tsvs))
+        print(self.tsvs)
+        #print(product(self.motifs, self.tsvs))
 
 
         self.motifs = pd.read_csv(os.path.join(f'{self.caller}_motifs.txt'), sep='\t').iloc[:,0].dropna().tolist()
         pool = multiprocessing.Pool()
+        temp = product(self.motifs, self.tsvs)
+        print([iter for iter in temp])
         results = pool.imap_unordered(self.get_kmer_counts, product(self.motifs, self.tsvs))
 
         case_kmer_counts = {}

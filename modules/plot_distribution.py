@@ -62,9 +62,13 @@ def create_1_plots(WT_df1, slop=5000*10, apoe="All APOE", cohort="All Cohorts"):
     #print(filtered_df)
     # filter out AT repeats
     WT_df1 = WT_df1[WT_df1['p_value'] < .05]
+    WT_df1 = WT_df1[WT_df1['statistic'] > 0]
+    # sort by statistic
+    WT_df1 = WT_df1.sort_values(by=['statistic'], ascending=False)
+    
     #WT_df1 = WT_df1.sort_values(by=['actual_variants'], ascending=False)
     # drop dinucleotide repeats
-    WT_df1 = WT_df1[WT_df1['variant'].str.len() > 2]
+    #WT_df1 = WT_df1[WT_df1['variant'].str.len() > 2]
 
 
     for i, row in WT_df1.iterrows():

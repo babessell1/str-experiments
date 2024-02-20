@@ -65,6 +65,8 @@ def create_2_plots(WT_df1, WT_df2, slop=5000*10, first="strling", apoe="All APOE
     WT_df1 = WT_df1[WT_df1["statistic"] > 0]
     # remove dinucleotide repeats
     WT_df1 = WT_df1[WT_df1['variant'].str.len() > 2]
+    # sort by descending statistic
+    WT_df1 = WT_df1.sort_values(by='statistic', ascending=False)
 
     if first == "strling":
         label1 = "STRling"
