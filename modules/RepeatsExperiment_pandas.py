@@ -8,10 +8,12 @@ from statsmodels.stats.multitest import multipletests
 import multiprocessing
 import warnings
 import pickle as pkl
+import dask.dataframe as dd
 
 # Filter out the "p-value capped" warning
 warnings.filterwarnings("ignore", category=UserWarning, message="p-value capped: true value larger than 0.25")
 
+#
 class RepeatsExperiment:
     def __init__(self, tsv_dir, csv_metadata, chroms="All", sex=None, tissue=None,
                  dataset=None, cohort=None, race=None, ethnicity=None, apoe=None, 
@@ -64,10 +66,11 @@ class RepeatsExperiment:
         if self.test == "AD":
             warnings.warn("")
         
-        if chroms=="All":
-            chroms =  ['chr1', 'chr2', 'chr3', 'chr4', 'chr5', 'chr6', 'chr7', 'chr8',
-                       'chr9', 'chr10', 'chr11', 'chr12', 'chr13', 'chr14', 'chr15', 'chr16',
-                       'chr17', 'chr18', 'chr19', 'chr20', 'chr21', 'chr22', 'chrX', 'chrY']
+        # Default to all chromosomes if none specified
+        if chroms is None:
+            self.chroms = [f'chr{i}' for i in range(1, 23)] + ['chrX', 'chrY']
+        else:
+            self.chroms = chroms if isinstance(chroms, list) else [chroms]
             
         if type(chroms) is not list:
             chroms = [chroms]
@@ -95,7 +98,10 @@ class RepeatsExperiment:
     @staticmethod
     def get_metadata_from_filename(filename):
         """
-        Pull subject ID and tissue type from the filename
+        Extract metadata from filename
+        Arg: filename (str)
+        Returns: subject (str), tissue (str)
+
         """
         basename = os.path.basename(filename)
         if basename.startswith("ADNI"):
@@ -110,6 +116,9 @@ class RepeatsExperiment:
 
     @staticmethod
     def rev_complement(motif):
+        """
+        Reverse complement a DNA sequence
+        """
         rev_dict = {
             "A": "T",
             "T": "A",
@@ -358,24 +367,9 @@ class RepeatsExperiment:
             dff = self.collapse_variants(dff)
 
             if any((dff['counts'] > files_processed) & (dff['#chrom'] == chrom)):
-                print(f"Error: Counts are higher than the current iteration ({iteration+1}).")
-                print("Offending rows in the aggregate DataFrame:")
-                print(dff[(dff['counts'] > files_processed) & (dff['#chrom'] == chrom)])
-                print('before')
-                print(dff_before[(dff_before['counts'] > iteration) & (dff_before['#chrom'] == chrom)])
-                print('next')
-                print(next_df[(next_df['repeatunit'] == "AT") & (next_df['#chrom'] == chrom)])
                 raise ValueError("Counts are higher than the current iteration.")
             
             iteration += 1
-
-            progress = iteration / len(self.tsvs) * 100
-            # write progress to logs
-            #log_file.write(f"#### {chrom} Progress: {progress:.2f}% [{iteration}/{len(self.tsvs) }] ##\n")
-
-            # print progress every 20th iteration
-            #if iteration % 20 == 0:
-                #print(f"## {chrom} Progress: {progress:.2f}% [{iteration}/{len(self.tsvs) }] ##", end='\r')
 
         # remove last row if last row is empty or nan
         if dff.iloc[-1].isnull().all() or dff.iloc[-1].isna().all():
@@ -401,7 +395,6 @@ class RepeatsExperiment:
         Handle the multiprocessing of the summarize function for each chromosome and motif combination
         """
         print("Creating Summary file...")
-
         if not hasattr(self, 'tsvs'): # if self.tsvs does not exist, get it from the pickled files
             with open(f"{self.caller}_tsvs.txt", 'rb') as handle:
                 self.tsvs = pkl.load(handle)
@@ -440,7 +433,6 @@ class RepeatsExperiment:
         """
         Match each variant in a summary df to all corresponding variants in each subject df to extract case and control allele2 estimate sizes for each variant (defined by a row in the summary df). This can be done in parallel
         """
-        i = iter[0]
         variant_row = iter[1]
         
         if variant_row['counts'] < self.count_cutoff:
@@ -455,9 +447,7 @@ class RepeatsExperiment:
         matching_variants = []
         matching_filenames = []
         add_similar = True  # if true, when multiple expansions in same STR region, add together. Otherwise skip the sample
-        
-        warn_flag = False
-        
+        warn_flag = False 
         cnt_multi = 0
 
         # get all tsvs for the motif and chromosome
@@ -473,56 +463,26 @@ class RepeatsExperiment:
                 (variant_df['left'] >= mean_left - range_ ) &
                 (variant_df['left'] <= mean_left + range_ )
             ][self.test_variable].tolist()
-
-            #if variant == "AT" and chrom == "chr1" and abs(mean_left - 52797421) < range_:
-            if len(add_variants) > 1:
-                #print(f"MULTI relative to {mean_left}-----------------------")
-                for row in add_variants:
-                    #print(row)
-                    pass
-                
-                #print(f"IF SORTED")
-                sorted_variant_df = variant_df.sort_values('left')
-                add_variants_sorted = sorted_variant_df[
-                    (sorted_variant_df['left'] >= mean_left - range_ ) &
-                    (sorted_variant_df['left'] <= mean_left + range_ )
-                ][self.test_variable].tolist()
-                for row in add_variants_sorted:
-                    #print(row)
-                    pass
             
             if len(add_variants) > 1:
-                #print("WARNING: MORE THAN ONE MATCHING VARIANT FOUND IN SINGLE SUBJECT")
                 warn_flag = True
                 cnt_multi+=1
                 if add_similar:
                     add_variants = np.sum(add_variants)
-                    matching_variants.append(add_variants)
-                else:
-                    continue
-                                                
+                    matching_variants.append(add_variants)                               
             elif len(add_variants) > 0:
                 matching_variants.append(*add_variants)
                 matching_filenames.append(os.path.join(self.tsv_dir, motif, tsv_file))
             elif self.assume_zero:
                 matching_variants.append(0) # assume zero (same as ref) if no matching variants
                 matching_filenames.append(os.path.join(self.tsv_dir, motif, tsv_file))
-
-
-        #print("case tsvs: ", self.case_tsvs[motif][:10])
-        #print("cont tsvs: ", self.cont_tsvs[motif][:10])
-
-        #print("matching_filenames: ", matching_filenames[:10])
-
+            else:
+                matching_variants.append(np.nan)
+                
         case_vals = [matching_variants[idx] for idx, file in enumerate(matching_filenames) if file in self.case_tsvs[motif]]
         cont_vals = [matching_variants[idx] for idx, file in enumerate(matching_filenames) if file in self.cont_tsvs[motif]]
 
         total_found = len([val for val in case_vals if np.abs(val)>0] + [val for val in cont_vals if np.abs(val>0)])
-
-        #print(f"Found {total_found} expansions for {variant} in {chrom} in {self.cohort} cohort")
-
-        #print(f"Case vals: {case_vals}")
-        #print(f"Cont vals: {cont_vals}")
 
         # dont bother testing if the amount of expansions is low
         if sum(val > 0 for val in case_vals) + sum(val > 0 for val in cont_vals) < self.count_cutoff:
@@ -667,8 +627,6 @@ class RepeatsExperiment:
 
         if type(motif) is not str:  # handle nans (may want to write csv to log file so we can rerun these samples)
             return tsvs, case_tsvs, cont_tsvs
-        #if not os.path.exists(os.path.join(self.tsv_dir, motif)): # 
-        #    continue
 
         for file in os.listdir(os.path.join(self.tsv_dir, motif)):
             if file.endswith(self.locus_file_extension):
@@ -804,4 +762,13 @@ class RepeatsExperiment:
 
         pool.close()  # Close and join the pool after all tasks are submitted
         pool.join()
+
+
+    def create_array(self, test_file):
+        """
+        Create a numpy array from the test file
+        Converts categorical variables to integers
+        """
+        
+
 

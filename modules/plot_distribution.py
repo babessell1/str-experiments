@@ -61,10 +61,16 @@ def create_1_plots(WT_df1, slop=5000*10, apoe="All APOE", cohort="All Cohorts"):
     #filtered_df = WT_df1[WT_df1['variant'] == "ACGGGGAGAGGGAGAGGGAG"]
     #print(filtered_df)
     # filter out AT repeats
-    WT_df1 = WT_df1[WT_df1['p_value'] < .05]
-    WT_df1 = WT_df1[WT_df1['statistic'] > 0]
+    WT_df1 = WT_df1[WT_df1['p_corrected'] < .05]
+    #WT_df1 = WT_df1[WT_df1['statistic'] > 0]
     # sort by statistic
     WT_df1 = WT_df1.sort_values(by=['statistic'], ascending=False)
+
+    # temp
+    WT_df1 = WT_df1[WT_df1['chrom'].isin(['chr2'])]
+    WT_df1 = WT_df1[WT_df1['variant'].isin(['AT', 'AAAG', 'AGCAT'])]
+    # remove ATs on chromosomes other than chr4
+    WT_df1 = WT_df1[~((WT_df1['chrom'] != 'chr4') & (WT_df1['variant'] == 'AT'))]
     
     #WT_df1 = WT_df1.sort_values(by=['actual_variants'], ascending=False)
     # drop dinucleotide repeats
@@ -82,6 +88,10 @@ def create_1_plots(WT_df1, slop=5000*10, apoe="All APOE", cohort="All Cohorts"):
 
         print(f"Case values (non-zero): {len(case_values)} ({len([x for x in case_values if x != 0])})")
         print(f"Control values (non-zero): {len(control_values)} ({len([x for x in control_values if x != 0])})")
+        
+        # drop zeros
+        case_values = [x for x in case_values if x != 0]
+        control_values = [x for x in control_values if x != 0]
             
         ###########################
         max_value = max(max(case_values), max(control_values))

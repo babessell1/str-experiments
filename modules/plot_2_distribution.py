@@ -62,11 +62,31 @@ def create_2_plots(WT_df1, WT_df2, slop=5000*10, first="strling", apoe="All APOE
     #print(filtered_df)
     
     WT_df1 = WT_df1[WT_df1["p_corrected"] < 0.05]
-    WT_df1 = WT_df1[WT_df1["statistic"] > 0]
+    #WT_df1 = WT_df1[WT_df1["statistic"] > 0]
     # remove dinucleotide repeats
     WT_df1 = WT_df1[WT_df1['variant'].str.len() > 2]
     # sort by descending statistic
     WT_df1 = WT_df1.sort_values(by='statistic', ascending=False)
+
+    # get only 
+    # chr4 & AT
+    # or chrX & AAAG
+    # or chrX & AGCAT
+    # or chr11 & AAAG
+    # or chr2 & AAAG
+
+    ###############################################################
+    WT_df1 = WT_df1[WT_df1['p_corrected'] < .05]
+    #WT_df1 = WT_df1[WT_df1['statistic'] > 0]
+    # sort by statistic
+    WT_df1 = WT_df1.sort_values(by=['statistic'], ascending=False)
+
+    # temp
+    WT_df1 = WT_df1[WT_df1['chrom'].isin(['chr2'])]
+    WT_df1 = WT_df1[WT_df1['variant'].isin(['AT', 'AAAG', 'AGCAT'])]
+    # remove ATs on chromosomes other than chr4
+    WT_df1 = WT_df1[~((WT_df1['chrom'] != 'chr4') & (WT_df1['variant'] == 'AT'))]
+    ###############################################################
 
     if first == "strling":
         label1 = "STRling"
