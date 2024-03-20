@@ -34,7 +34,7 @@ class EHDNExperiment(RepeatsExperiment):
         return filtered_df
 
 
-    def collapse_tsv_file(self, tsv_file, out_dir):
+    def collapse_tsv_file_slow(self, tsv_file, out_dir):
         """
         Process a single TSV file, collapsing variants.
         """
@@ -140,6 +140,56 @@ class EHDNExperiment(RepeatsExperiment):
         tsv_file_name = os.path.basename(tsv_file)
         out_file_path = os.path.join(out_dir, tsv_file_name)
         new_df.to_csv(out_file_path, sep='\t', index=False)
+
+    
+    
+    def collapse_tsv_file(self, tsv_file, out_dir):
+        # Skipping an empty file
+        if os.stat(tsv_file).st_size == 0:
+            print(f"Skipping empty file: {tsv_file}")
+            return
+
+        # Reading in the file
+        df = pd.read_csv(tsv_file, sep='\t')
+        df = self.filter_variants(df, "All")
+        
+        # Sorting values
+        df.sort_values(['contig', 'motif', 'start'], inplace=True)
+        df.reset_index(drop=True, inplace=True)
+
+        if df.empty:
+            print(f'{tsv_file} is empty')
+            return
+
+        # Create a custom group key with slop
+        df['group_key'] = df.groupby(['contig', 'motif']).apply(
+            lambda x: (x['start'] // (self.slop * self.slop_modifier)).astype(int)
+        ).array
+
+        # Let's define the collapsing function
+        def collapse(group):
+            sum_allele_est = group['het_str_size'].sum()
+            return pd.Series({
+                'contig': group['contig'].iloc[0],
+                'left': group['start'].mean().astype(int),
+                'right': group['start'].mean().astype(int) + 1,
+                'motif': group['motif'].iloc[0],
+                'allele_est': sum_allele_est,
+                'counts': group.shape[0],
+                'mean_left': group['start'].mean(),
+                'merged_expansions': group.shape[0] > 1
+            })
+
+        # Collapsing the DataFrame via groupby.apply
+        collapsed_df = df.groupby('group_key').apply(collapse).reset_index(drop=True)
+
+        # Clean up the DataFrame by getting rid of unnecessary columns
+        collapsed_df['left'] = collapsed_df['mean_left']
+        collapsed_df.drop(columns=['counts', 'mean_left'], inplace=True)
+
+        # Save the collapsed data to a file
+        out_file_path = os.path.join(out_dir, os.path.basename(tsv_file))
+        collapsed_df.to_csv(out_file_path, sep='\t', index=False)
 
     
     def lrdn_process_chromosome(self, iter):

@@ -13,7 +13,6 @@ import dask.bag as db
 import dask.array as da
 import pickle as pkl
 
-
 # Filter out the "p-value capped" warning
 warnings.filterwarnings("ignore", category=UserWarning, message="p-value capped: true value larger than 0.25")
 # filter  UserWarning: Sending large graph of size 22.63 MiB. This may cause some slowdown. Consider scattering data ahead of time and using futures. warnings.warn(
@@ -22,14 +21,33 @@ warnings.filterwarnings("ignore", category=UserWarning, message="Sending large g
 
 
 class RepeatsExperiment:
-    def __init__(self,
-        tsv_dir, csv_metadata, 
-        chroms="All", sex=None, tissue=None, dataset=None, cohort=None, race=None, ethnicity=None, apoe=None, 
-        slop=100, slop_modifier=1.5, test="KS", motifs_to_drop=[], count_cutoff=10, assume_zero=True, 
-        cores_per_node=36, mem_per_node="128GB", partition="", account="", nodes=1, walltime="4:00:00", dask_log_directory="dask_logs",
-        corrupt_file_log=None
-    ):
-        
+    def __init__(self, 
+                tsv_dir, 
+                csv_metadata, 
+                chroms="all_chroms", 
+                sex=None, 
+                tissue=None,
+                dataset=None, 
+                cohort="all_cohorts", 
+                race=None, 
+                ethnicity=None, 
+                apoe="all_apoe",
+                slop=100, 
+                slop_modifier=1.5,
+                test="KS", 
+                motifs_to_drop=None, 
+                count_cutoff=10,
+                assume_zero=True, 
+                cores_per_node=36, 
+                mem_per_node="128GB",
+                partition="", 
+                account="", 
+                nodes=1, 
+                walltime="12:00:00",
+                dask_log_directory="/home/bbessell/str-analysis/dask_logs", 
+                corrupt_file_log = "corrupt_files.log"
+                ):
+    
         # data inputs
         self.tsv_dir = tsv_dir
         self.csv_metadata = csv_metadata
@@ -38,7 +56,7 @@ class RepeatsExperiment:
         self.slop = slop
         self.slop_modifier = slop_modifier
         self.test = test
-        self.motifs_to_drop = motifs_to_drop
+        self.motifs_to_drop = motifs_to_drop or []
         self.count_cutoff = count_cutoff
         self.assume_zero = assume_zero
 
@@ -59,47 +77,6 @@ class RepeatsExperiment:
         self.cols_to_drop = []
 
         # cohort parameters
-        if cohort is None or cohort == "all_cohorts":
-            cohort = "all_cohorts"
-            self.cohort = cohort
-        else:
-            # make a manifest of only the specifid cohort
-            manifest_df = pd.read_csv(self.csv_metadata)
-            self.csv_metadata = os.path.join("manifests", os.path.basename(csv_metadata).split(".")[0] + "_" + cohort + ".csv")
-            manifest_df[manifest_df['Cohort'] == cohort].to_csv(self.csv_metadata)
-
-        if apoe is None or apoe == "all_apoe":
-            apoe = "all_apoe"
-        else:
-            manifest_df = pd.read_csv(self.csv_metadata)
-            # remove nans APOE
-            manifest_df = manifest_df[manifest_df['APOE'].notna()]
-            # APOE column should be an string
-            manifest_df['APOE'] = manifest_df['APOE'].astype(int).astype(str)
-            self.csv_metadata = os.path.join("manifests", os.path.basename(csv_metadata).split(".")[0] + "_" + apoe + ".csv")
-            manifest_df[manifest_df['APOE'] == str(apoe)].to_csv(self.csv_metadata)
-
-        if self.test == "AD":
-            warnings.warn("")
-        
-        if chroms=="All":
-            chroms =  ['chr1', 'chr2', 'chr3', 'chr4', 'chr5', 'chr6', 'chr7', 'chr8',
-                       'chr9', 'chr10', 'chr11', 'chr12', 'chr13', 'chr14', 'chr15', 'chr16',
-                       'chr17', 'chr18', 'chr19', 'chr20', 'chr21', 'chr22', 'chrX', 'chrY']
-            
-        if type(chroms) is not list:
-            chroms = [chroms]
-        
-        self.chroms = chroms
-        self.cohort = cohort
-
-        # coerce apoe to string of int if possible
-        if apoe is not None:
-            if type(apoe) is not str:
-                apoe = str(int(apoe))
-
-        self.apoe = apoe
-  
         self.metadict = {
             "Sex": sex,
             "Tissue": tissue,
@@ -110,20 +87,52 @@ class RepeatsExperiment:
             "APOE": apoe,
         }
 
-        # logging
-        if corrupt_file_log is None:
-            self.corrupt_file_log = "corrupt_files.log"
-        else:
-            self.corrupt_file_log = corrupt_file_log
-
-        # empty the log files
+        # file init
+        self.corrupt_file_log = corrupt_file_log
         open(self.corrupt_file_log, 'w').close()
+        
+        if chroms=="all_chroms":
+            self.chroms = [f'chr{i}' for i in range(1, 23)] + ['chrX', 'chrY'] if chroms in (None, "all_chroms") else chroms
+           
+        if type(chroms) is not list:
+            self.chroms = [chroms]
+        
+
+    def _init_manifest(self):
+        """
+        Create a manifest file for the experiment from the NIAGADS metadata file
+        """
+        manifest_df = pd.read_csv(self.csv_metadata)
+        if self.metadict["Cohort"] != "all_cohorts":
+            manifest_df = manifest_df[manifest_df['Cohort'] == self.metadict["Cohort"]]
+        if self.metadict["APOE"] != "all_apoe":
+            manifest_df = manifest_df[manifest_df['APOE'] == self.metadict["APOE"]]
+        if self.sex is not None:
+            manifest_df = manifest_df[manifest_df['Sex'] == self.metadict['Sex']]
+        if self.race is not None:
+            manifest_df = manifest_df[manifest_df['Race'] == self.metadict['Race']]
+        if self.ethnicity is not None:
+            manifest_df = manifest_df[manifest_df['Ethnicity'] == self.metadict['Ethnicity']]
+        if self.tissue is not None:
+            # tissue is not in the actual manifest, so we need to search the filename
+            # blood will have the string -BL-, brain will have -BR-
+            if self.metadict["Tissue"] == "Blood" or self.metadict["Tissue"] == "BL":
+                tissue = "BL"
+            elif self.metadict["Tissue"] == "Brain" or self.metadict["Tissue"] == "BR":
+                tissue = "BR"
+            else:
+                raise ValueError("Tissue not recognized. Must be 'Blood' or 'Brain'")
+            manifest_df = manifest_df[manifest_df['location'].str.contains("-" + tissue + "-")]
+        
+        self.csv_metadata = os.path.join("manifests", os.path.basename(self.csv_metadata).split(".")[0] + "_" + self.metadict["Cohort"] + ".csv")
+        manifest_df.to_csv(self.csv_metadata, index=False)
+        self.meta_df = manifest_df
 
 
     @staticmethod
     def get_metadata_from_filename(filename):
         """
-        Pull subject ID and tissue type from the filename
+        Pull subject ID and tissue type from the filename (NIAGADS convention)
         """
         basename = os.path.basename(filename)
         if basename.startswith("ADNI"):
@@ -153,44 +162,7 @@ class RepeatsExperiment:
         """
         Checks if string is a rotation of another
         """
-        if len(str1) != len(str2):
-            return False
-
-        if str1 == str2:
-            return True
-
-        # to handle idexing in circular rotation
-        concat = str1 + str1
-        n = len(concat)
-
-        # make prefix table as per Knuth-Morris-Pratt (KMP) algorithm
-        prefix = [0] * n
-        j = 0
-        for i in range(1, n):
-            if concat[i] == concat[j]:
-                j += 1
-                prefix[i] = j
-            else:
-                if j > 0:
-                    j = prefix[j-1]
-                    i -= 1
-                else:
-                    prefix[i] = 0
-
-        # Check if string 2 is a substring in the concatenated string with prefix table
-        j = 0
-        for i in range(n):
-            if concat[i] == str2[j]:
-                j += 1
-                if j == len(str2):
-                    return True
-            else:
-                if j > 0:
-                    j = prefix[j-1]
-                    i -= 1
-
-        # string 2 not found as substring
-        return False
+        return len(str1) == len(str2) and str1 in str2 + str2
     
 
     def start_slurm_cluster(self):
@@ -202,34 +174,30 @@ class RepeatsExperiment:
             memory=self.mem_per_node,
             queue=self.partition,
             account=self.account,
-            log_directory="/home/bbessell/str-analysis/dask_logs",
-            walltime="24:00:00",
+            log_directory=self.dask_log_directory,
+            walltime=self.walltime,
             interface="ib0",
             processes=self.cores_per_node,
             #job_extra_directives=[f'--nodes={self.nodes}'],
-            death_timeout=100*24*60,  # 100 days
+            death_timeout=1*24*60,  # 1 day
         )
     
 
     def get_metadata_from_subject(self, subject):
         """
-        Match subject name to metadata file and pull the rest of the useful metadata as a dictionary
+        Match subject name to metadata file and pull the rest of the useful metadata as a dictionary.
+        Assumes that self.meta_df is a DataFrame property of the class.
         """
-        meta_df = pd.read_csv(self.csv_metadata)
-        subject_metadata = {
-            'Dataset': meta_df.loc[meta_df['Subject'] == subject, 'Dataset'].values[0],
-            'Disease': meta_df.loc[meta_df['Subject'] == subject, 'Disease'].values[0],
-            'Cohort': meta_df.loc[meta_df['Subject'] == subject, 'Cohort'].values[0],
-            'Sex': meta_df.loc[meta_df['Subject'] == subject, 'Sex'].values[0],
-            'Race': meta_df.loc[meta_df['Subject'] == subject, 'Race'].values[0],
-            'Ethnicity': meta_df.loc[meta_df['Subject'] == subject, 'Ethnicity'].values[0],
-            'Diagnosis': meta_df.loc[meta_df['Subject'] == subject, 'Diagnosis'].values[0],
-            'Assay': meta_df.loc[meta_df['Subject'] == subject, 'Assay'].values[0],
-        }
-        if self.apoe is not None and self.apoe != "all_apoe":
-            subject_metadata['APOE'] = meta_df.loc[meta_df['Subject'] == subject, 'APOE'].values[0].astype(int).astype(str)
-        else:
-            subject_metadata['APOE'] = meta_df.loc[meta_df['Subject'] == subject, 'APOE'].values[0]
+        subject_row = self.meta_df[self.meta_df['Subject'] == subject]
+        if subject_row.empty:
+            # Handle case where subject is not found
+            raise ValueError(f"Subject {subject} not found in metadata.")
+
+        subject_data = subject_row.iloc[0]
+
+        subject_metadata = {field: subject_data[field] for field in [
+            'Dataset', 'Disease', 'Cohort', 'Sex', 'Race', 'Ethnicity', 'Diagnosis', 'Assay', 'APOE'
+        ]}
 
         return subject_metadata
 
@@ -334,23 +302,12 @@ class RepeatsExperiment:
 
         return new_df
     
-    @staticmethod
-    def add_motif_dir_to_tsv_path(tsv, motif):
-        """
-        Add the motif directory to the second to last position in the tsv path
-        """
-        # DEPRECATED
-        tsv_split = tsv.split("/")
-        tsv_split.insert(-1, motif)
-        return "/".join(tsv_split)
-
 
     def summarize_chrom_motif(self, chrom_motif):
         """
         Aggregate summary statisitcs for each variant in a chromosome and motif
         """
         # get subset of expanded variants for the chromosome and motif
-        #tsv_to_read = self.add_motif_dir_to_tsv_path(self.tsvs[0], motif)
         chrom, motif = chrom_motif
 
         # do not summarize if too few variants found
@@ -368,7 +325,6 @@ class RepeatsExperiment:
             df1 = df1[df1['repeatunit'] == motif]
 
 
-        #tsv_to_read = self.add_motif_dir_to_tsv_path(self.tsvs[1], motif)
         tsv_to_read = self.tsvs[motif][1]
         df2 = pd.read_csv(tsv_to_read, sep='\t')
         df2 = df2[df2['#chrom'] == chrom]
@@ -429,8 +385,8 @@ class RepeatsExperiment:
             return
         
         dff.to_csv(os.path.join(
-            "results", "summaries", self.caller, chrom, self.cohort, self.apoe, 
-            f"{self.caller}_summary_{chrom}_{self.cohort}_{self.apoe}_{motif}.csv"
+            "results", "summaries", self.caller, chrom, self.metadict["Cohort"], self.metadict["APOE"], 
+            f"{self.caller}_summary_{chrom}_{self.metadict["Cohort"]}_{self.metadict["APOE"]}_{motif}.csv"
         ), index=False)
         
         return
@@ -457,7 +413,7 @@ class RepeatsExperiment:
 
         # create directories needed for summary funciton csv files
         for chrom in chromosomes:
-            dir_path = os.path.join("results", "summaries", self.caller, chrom, self.cohort, self.apoe)
+            dir_path = os.path.join("results", "summaries", self.caller, chrom, self.metadict["Cohort"], self.metadict["APOE"])
             if not os.path.exists(dir_path):
                 os.makedirs(dir_path)
 
@@ -614,8 +570,8 @@ class RepeatsExperiment:
         # get all combinations of motifs and chromosomes
         files_to_process = [
             os.path.join(
-                "results", "summaries", self.caller, chrom, self.cohort, self.apoe,
-                 f"{self.caller}_summary_{chrom}_{self.cohort}_{self.apoe}_{motif}.csv"
+                "results", "summaries", self.caller, chrom, self.metadict["Cohort"], self.metadict["APOE"],
+                 f"{self.caller}_summary_{chrom}_{self.metadict["Cohort"]}_{self.metadict["APOE"]}_{motif}.csv"
             ) for chrom, motif in product(self.chroms, self.motifs)
         ]
 
@@ -672,7 +628,7 @@ class RepeatsExperiment:
 
         self.WT_df = pd.DataFrame(significant_variants)
         self.WT_df.sort_values('p_corrected', ascending=True)
-        self.WT_df.to_csv(f"results/{self.caller}_{self.test}_{chroms}_{self.cohort}_{self.apoe}.csv", index=False)
+        self.WT_df.to_csv(f"results/{self.caller}_{self.test}_{chroms}_{self.metadict["Cohort"]}_{self.metadict["APOE"]}.csv", index=False)
 
         return
     

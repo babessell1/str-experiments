@@ -17,6 +17,7 @@ if __name__ == "__main__":
     import pandas as pd
     import dask
     from s3_interface import download_tar_files_from_directory, unpack_tar_files
+    import time
 
     cohort = "all_cohorts"
     test = "WT"
@@ -67,8 +68,23 @@ if __name__ == "__main__":
         
     )
 
+    start = time.time()
+    print("seperating tsvs by motif...")
     strling_exp.schedule_seperate_tsvs_by_motif(directory, seperated_dir)
+    done = time.time()
+    print(f"seperating tsvs by motif took {done - start} seconds")
+    start = done 
     strling_exp.schedule_collapse_tsvs(seperated_dir, collapsed_directory)
+    done = time.time()
+    print(f"collapsing tsvs by motif took {done - start} seconds")
+    start = done
     strling_exp.schedule_filter_tsv_files()
+    done = time.time()
+    print(f"filtering tsvs by motif took {done - start} seconds")
+    start = done
     strling_exp.schedule_summarizing()  # give csv to load instead of calculate
-    strling_exp.schedule_perform_stat_test()
+    print(f"summarizing tsvs by motif took {done - start} seconds")
+    start = done
+    #strling_exp.schedule_perform_stat_test()
+    done = time.time()
+    print(f"performing stat test on tsvs by motif took {done - start} seconds")
