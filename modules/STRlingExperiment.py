@@ -38,7 +38,7 @@ class STRlingExperiment(RepeatsExperiment):
 
         return filtered_df
 
-    def collapse_tsv_file_slow(self, tsv_file, out_dir):
+    def collapse_tsv_file(self, tsv_file, out_dir):
         """
         Process a single TSV file, collapsing variants.
         """
@@ -46,8 +46,6 @@ class STRlingExperiment(RepeatsExperiment):
         if os.stat(tsv_file).st_size == 0:
             print(f"Skipping empty file: {tsv_file}")
             return
-
-        subject, tissue = self.get_metadata_from_filename(tsv_file)
         
         # NOTE: pandas is probably better than dask for this because the data is small and 
         # we have to sort and reset indexes 
@@ -171,49 +169,6 @@ class STRlingExperiment(RepeatsExperiment):
             print("failed to process tsv file: ", tsv_file)
 
             return
-
-    
-    def collapse_tsv_file(self, tsv_file, out_dir):
-        if os.stat(tsv_file).st_size == 0:
-            print(f"Skipping empty file: {tsv_file}")
-            return
-        
-        df = pd.read_csv(tsv_file, sep='\t')
-        df = self.filter_variants(df, "All")
-        df = df.sort_values(['#chrom', 'repeatunit', 'left'])
-        df = df.reset_index(drop=True)
-
-        if df.empty:
-            os.remove(tsv_file)
-            return
-
-        # Create a custom group key based on the slop_modifier
-        df['group_key'] = df.groupby(['#chrom', 'repeatunit']).apply(
-            lambda x: (x['left'] // (self.slop * self.slop_modifier)).astype(int)
-        ).array
-
-        # Define a function for collapsing within groups
-        def collapse(group):
-            sum_allele1_est = group['allele1_est'].sum()
-            sum_allele2_est = group['allele2_est'].sum()
-            return pd.Series({
-                'left': group['left'].mean().astype(int),
-                'right': group['left'].mean().astype(int) + 1,
-                'repeatunit': group['repeatunit'].iloc[0],
-                'allele1_est': sum_allele1_est,
-                'allele2_est': sum_allele2_est,
-                'counts': group.shape[0],
-                'mean_left': group['left'].mean(),
-                'merged_expansions': group.shape[0] > 1
-            })
-
-        # Apply the collapse function to each group and reset index
-        collapsed_df = df.groupby("group_key").apply(collapse).reset_index(drop=True)
-
-        out_file_path = os.path.join(out_dir, os.path.basename(tsv_file))
-        collapsed_df.to_csv(out_file_path, sep='\t', index=False)
-
-        print(f"Successfully collapsed file: {out_file_path}")
 
 
     def get_kmer_counts(self, iter):

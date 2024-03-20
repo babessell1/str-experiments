@@ -9,6 +9,7 @@ import multiprocessing
 import warnings
 import pickle as pkl
 import dask.dataframe as dd
+from dask.distributed import Client
 from modules.NIAGADSExperiment import NIAGADSExperiment
 from tqdm.notebook import tqdm
 from time import time
@@ -46,6 +47,28 @@ class RepeatsExperiment(NIAGADSExperiment):
         self.assume_zero = assume_zero
         self.seperate_by_motif = seperate_by_motif
         self.aggregation_batch_size = 100
+
+        self.meta1 = pd.DataFrame({
+            '#chrom': pd.Series([], dtype='object'),
+            'left': pd.Series([], dtype='float64'),
+            'mean_left': pd.Series([], dtype='float64'),
+            'repeatunit': pd.Series([], dtype='object'),
+            'counts': pd.Series([], dtype='int64'),
+            'variance_left': pd.Series([], dtype='float64'),
+            'm2': pd.Series([], dtype='float64'),
+        })
+
+        self.meta2 = pd.DataFrame({
+            '#chrom': pd.Series([], dtype='object'),
+            'left': pd.Series([], dtype='float64'),
+            'repeatunit': pd.Series([], dtype='object'),
+            'counts': pd.Series([], dtype='int64'),
+            'variance_left': pd.Series([], dtype='float64'),
+            'mean_left': pd.Series([], dtype='float64'),
+            'left_diff': pd.Series([], dtype='float64'),
+        })
+
+
 
         # for subclasses not sure if these are needed
         #self.repeat_nomenclature = ""
@@ -179,27 +202,33 @@ class RepeatsExperiment(NIAGADSExperiment):
         return new_df
 
 
-    def collapse_variants(self, df):
+    def collapse_variants(self, ddf):
         """
-        match adjacent variants from a subject and aggregate row based on chromosome,
-        using a groupby, but still accounting for the proximity of the left coordinates
+        Dask compatible method to match adjacent variants from a subject and aggregate 
+        rows based on chromosome proximity of the left coordinates.
         """
-        df["group_diff"] = (
-            df.sort_values(["left", "repeatunit"])
-            .groupby("repeatunit")["left"]
-            .diff()
-            .gt(self.slop)
-            .cumsum()
-        )
-        grouped  = df.groupby(["repeatunit", "group_diff"])
+        # Calculate the difference between successive 'left' values within groups
+        ddf['left_diff'] = ddf.groupby(['#chrom', 'repeatunit'])['left'].diff().fillna(0)
         
-        # update the summary statistics with batch update equations (combine_means, combine_vars)
-        df = grouped.agg(
-            counts=("counts", "sum"),
-            mean_left=("left", "mean"),
-            variance_left=("left", "var"),
-        ).reset_index()
+        # Define a helper column to aid in identifying groups of rows to be collapsed
+        ddf['group_id'] = (ddf['left_diff'] > self.slop).cumsum()
+        
+        # Aggregate the counts, mean and variance while also counting the number of samples
+        agg_ddf = ddf.groupby(['#chrom', 'repeatunit', 'group_id']).agg({
+            '#chrom': 'first',
+            'left': 'mean',
+            'repeatunit': 'first',
+            'counts': 'sum',
+            'variance_left': lambda x: np.var(x, ddof=1),
+            'mean_left': 'mean',
+            'left_diff': 'first',
+        }).reset_index(drop=True)
 
+        # Clean up helper columns
+        #agg_ddf = agg_ddf.drop(columns=['left_diff', 'group_id'])
+        print(agg_ddf.head())
+
+        return agg_ddf
 
     def summarize_old(self, chrom_motif):
         """
@@ -357,6 +386,44 @@ class RepeatsExperiment(NIAGADSExperiment):
                 dff.to_csv(os.path.join(result_dir, csv_fname), index=False)
 
 
+    @staticmethod
+    def compute_divisions(ddf, ru_index, max_rows):
+        """
+        Compute the divisions for the dask dataframe such that divisions are near the max_rows
+        and only occur where 'ru_index' changes.
+
+        Parameters:
+        - ddf: dask.DataFrame to repartition
+        - max_rows: desired maximum number of rows per partition
+
+        Returns: a list of divisions for repartitioning
+        """
+        # Compute diff to find where 'ru_index' changes
+        # Fill NoneType values with a default value (0 in this case)
+        ru_index_changes = (ru_index != ru_index.shift()).astype(int)
+
+        # Now, get the change indices
+        change_indices = ru_index_changes[ru_index_changes != 0].index
+        # drop nonetype values
+        change_indices = change_indices.dropna()
+        change_indices = change_indices.compute().tolist()
+        print("change idx: ", change_indices)
+
+        # Get the actual divisions by finding indexes that are close to desired max_rows
+        division_indices = [0]  # First division is always the first index
+        current_max = max_rows
+        for index in change_indices:
+            if index > current_max:
+                division_indices.append(index)
+                current_max = index + max_rows
+        division_indices.append(len(ddf))  # Last division is the last index
+
+        # Convert to divisions which are the index values at division points
+        divisions = ddf.index.compute()[division_indices].tolist()
+
+        return divisions
+
+
     def summarize(self, chrom_motif):
         """
         Aggregate summary statistics for each variant in a chromosome and motif.
@@ -365,63 +432,86 @@ class RepeatsExperiment(NIAGADSExperiment):
         chrom, motif = chrom_motif
 
         if self.seperate_by_motif:
-            # Check if motif is present and that there are enough files to process
             if motif not in self.tsvs or len(self.tsvs[motif]) < self.count_cutoff:
-                return    
+                return
             file_paths = self.tsvs[motif]
         else:
-            # When not separating by motif, 'motif' will be None. Handle all files.
             motif = None  # Explicitly handle the non-separated motif case
             file_paths = self.tsvs
 
-        # Initialize an empty dataframe to concatenate all results
-        dff = dd.DataFrame()
-
-        # Prepare a progress description string
+        # Initialize a Dask DataFrame for the first file only
+        dff = None
         progress_desc = f"Processing {chrom}-{motif if motif else 'All Motifs'}"
-        
-        # Process the file_paths and assemble the final DataFrame
+
+        # Iterate over file_paths and construct Dask DataFrame by concatenation
         for idx, file_path in enumerate(file_paths):
-            # If on the first iteration or when not separate by motif, initialize the DataFrame
-            if idx == 0:
-                dff = self.read_and_filter_tsv(file_path, chrom, motif)
-                # Initialize columns for collapsing operation
+            next_df = self.read_and_filter_tsv(file_path, chrom, motif)
+
+            if dff is None:
+                dff = next_df
                 dff["mean_left"] = dff["left"]
-                dff["counts"] = np.ones(dff.shape[0])
-                dff["variance_left"] = np.zeros(dff.shape[0])
-                dff["m2"] = np.zeros(dff.shape[0])
-                dff.drop(columns=self.cols_to_drop, inplace=True)
-                print("first: ", dff.shape[0])
+                dff["counts"] = 1
+                dff["variance_left"] = 0
+                dff["m2"] = 0
+                dff = dff.map_partitions(lambda pdf: pdf.drop(columns=self.cols_to_drop, errors='ignore'))
             else:
-                # Otherwise, read the next file and merge it with the existing DataFrame
-                next_df = self.read_and_filter_tsv(file_path, chrom, motif)
-                # Proceed as before
-                next_df["counts"] = np.ones(next_df.shape[0])
-                next_df["variance_left"] = np.zeros(next_df.shape[0])
+                next_df["counts"] = 1
+                next_df["variance_left"] = 0
                 next_df["mean_left"] = next_df["left"]
-                next_df["m2"] = np.zeros(next_df.shape[0])
-                next_df.drop(columns=self.cols_to_drop, inplace=True)
+                next_df["m2"] = 0
+                next_df = next_df.map_partitions(lambda pdf: pdf.drop(columns=self.cols_to_drop, errors='ignore'))
                 dff = dd.concat([dff, next_df])
 
-            # Update tqdm progress manually
+            # Update tqdm progress manually for each file
             tqdm.write(f'{progress_desc}: {idx+1}/{len(file_paths)} files processed', end='\r')
-            
-        dff = self.collapse_variants(dff)
 
-        # Remove rows with counts below the cutoff and any remaining NaNs
-        #dff = dff.dropna().reset_index(drop=True)
-        #dff = dff[dff['counts'] >= self.count_cutoff]
+        # to collapse the variants we first need to create an index string
+        # the best way to do this will be to make the left coordinate a string and add 0's to make it a fixed length
+        # then we can concatenate the epeatunit, and the left coordinate such that indexing will give the
+        # same result as sorting by repeatunit and left coordinate
 
-        # If no variants were found after processing, nothing to do
-        if dff.empty:
-            return
-        
-        # Save results
+        # first extract the maximum length of the left coordinate
+        max_len = dff['left'].apply(lambda x: len(str(int(x))), meta=('x', 'int')).max().compute()
+        print("max_len: ", max_len)
+
+        # max repeatunit length
+        max_ru_len = dff['repeatunit'].apply(lambda x: len(x), meta=('x', 'object')).max().compute()
+        print("max_ru_len: ", max_ru_len)
+
+        ru_index = dff['repeatunit'].apply(lambda x: x.ljust(max_ru_len, '0'), meta=('x', 'object'))
+
+        # then create the index string
+        dff['index'] = ru_index + "_" + dff['left'].apply(lambda x: str(int(x)).zfill(max_len), meta=('x', 'object'))
+
+        # then reindex the dataframe
+        dff = dff.set_index('index')
+
+        # repartition such the the breaks can only occur where the repeat unit part of the index changes
+        divisions = self.compute_divisions(dff, ru_index, 20)
+        print(divisions)
+
+        print(dff.head())
+
+        # repartitoin such the the breaks can only occur where the repeat unit part of the index changes
+        # to do this we need a ballpark figure for the max size of a partition
+        # which we will base off of the known memory usage of the dataframe
+        # we will set a maximum parititon size of 2 million rows
+        # this is a bit of a guess but it should be a good starting point
+        max_rows = 2
+
+
+
+        # Filter rows with counts below the cutoff (compute necessary if conditions are used)
+        # dff = dff[dff['counts'] >= self.count_cutoff].compute()
+
+        # Ensure dff is non-empty and compute to obtain the pandas DataFrame
+        #if dff is not None and not dff.map_partitions(len).compute().sum() == 0:
+            # Save results
         result_dir = os.path.join("results", "summaries", self.caller, chrom, self.name_tag)
         os.makedirs(result_dir, exist_ok=True)
         pattern = f"{self.caller}_summary_{chrom}_{self.name_tag}"
         csv_fname = f"{pattern}_{motif}.csv" if self.seperate_by_motif else f"{pattern}.csv"
-        dff.to_csv(os.path.join(result_dir, csv_fname), index=False)
+        dff.to_csv(os.path.join(result_dir, csv_fname), single_file=True, index=False)
 
     
     def schedule_summarizing(self):
